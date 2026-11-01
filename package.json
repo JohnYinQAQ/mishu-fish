@@ -1,0 +1,62 @@
+{
+  "name": "mishu-fish",
+  "version": "0.13.1",
+  "private": true,
+  "description": "秘书鱼 · 微信 iLink Bot 私人秘书（CLI demo + DSH 插件）",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./lib/*": "./lib/*",
+    "./dist/*": "./dist/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "dist",
+    "bin",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [],
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "login": "node src/cli/login.ts",
+    "echo": "node src/cli/echo.ts",
+    "status": "node src/cli/status.ts",
+    "test": "node --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "release:zip": "bash scripts/make-release.sh"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/qrcode": "^1.5.5",
+    "typescript": "^5.9.2"
+  },
+  "license": "MIT",
+  "author": "mishu-fish contributors",
+  "keywords": [
+    "wechat",
+    "bot",
+    "dsh",
+    "plugin",
+    "secretary",
+    "ilink"
+  ]
+}

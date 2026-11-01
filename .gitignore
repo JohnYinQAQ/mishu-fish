@@ -1,0 +1,11 @@
+node_modules/
+*.log
+.DS_Store
+
+# 机器人凭据与本地状态：绝不进仓库
+.data/
+.qr/
+.tmp/
+
+# 本地打出来的发布包
+release/

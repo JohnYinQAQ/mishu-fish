@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# 秘书鱼启动器：自动找一个 >=22.18 的 node（优先 PATH，其次 DSH 自带的运行时）
+set -euo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CMD="${1:-help}"
+shift || true
+
+# demo 默认把凭据放在项目内的 .data/（已被 .gitignore 忽略）。
+# 想放到 ~/.dsh/mishu-fish 就自己 export MISHU_HOME。
+export MISHU_HOME="${MISHU_HOME:-$DIR/.data}"
+
+find_node() {
+  if [ -n "${MISHU_NODE:-}" ] && [ -x "${MISHU_NODE}" ]; then
+    printf '%s' "$MISHU_NODE"
+    return
+  fi
+  if command -v node >/dev/null 2>&1; then
+    command -v node
+    return
+  fi
+  local candidate
+  for candidate in "$HOME"/.dsh/dsh-runtimes/*/dependencies/node/bin/node; do
+    if [ -x "$candidate" ]; then
+      printf '%s' "$candidate"
+      return
+    fi
+  done
+}
+
+NODE_BIN="$(find_node || true)"
+if [ -z "${NODE_BIN:-}" ]; then
+  echo "找不到 node（需要 >= 22.18）。可以设 MISHU_NODE=/path/to/node 指定。" >&2
+  exit 1
+fi
+
+case "$CMD" in
+  login|echo|status|send)
+    exec "$NODE_BIN" "$DIR/src/cli/$CMD.ts" "$@"
+    ;;
+  test)
+    exec "$NODE_BIN" --test "$DIR"/tests/*.test.ts
+    ;;
+  *)
+    cat <<EOF
+秘书鱼 · 用法
+
+  ./bin/mishu login     扫码创建机器人账号（会显示二维码）
+  ./bin/mishu echo      监听并复读消息，验证收发链路
+  ./bin/mishu status    查看当前账号与本地状态
+  ./bin/mishu send "…"  主动发一条消息（验证主动消息能力）
+
+数据目录：\${MISHU_HOME:-~/.dsh/mishu-fish}
+EOF
+    exit 0
+    ;;
+esac

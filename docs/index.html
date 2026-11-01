@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>秘书鱼 · 微信里的私人秘书</title>
+<meta name="description" content="给 DeepSeek Harness 加一个微信入口：会记事、会催你、会主动问候的私人秘书。" />
+<style>
+  :root { --fg:#17181a; --muted:#6b7076; --line:#e7e8ea; --bg:#fff; --soft:#f7f8f9; --accent:#1f6feb; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.7 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 56px 24px 80px; }
+  h1 { font-size: 40px; line-height:1.2; margin: 0 0 12px; letter-spacing:-0.5px; }
+  .tag { color: var(--muted); font-size:18px; margin: 0 0 28px; }
+  .cta { display:flex; gap:12px; flex-wrap:wrap; margin-bottom: 40px; }
+  .btn { display:inline-block; padding: 12px 20px; border-radius: 10px; text-decoration:none; font-weight:600; border:1px solid var(--line); color:var(--fg); background:var(--bg); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color:#fff; }
+  .shot { width:100%; border:1px solid var(--line); border-radius: 14px; background: var(--soft); min-height: 280px; display:flex; align-items:center; justify-content:center; color:var(--muted); margin-bottom: 44px; overflow:hidden; }
+  .shot img { width:100%; display:block; }
+  h2 { font-size: 22px; margin: 44px 0 16px; }
+  .grid { display:grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap:14px; }
+  .card { border:1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+  .card b { display:block; margin-bottom:6px; }
+  .card span { color: var(--muted); font-size: 14px; }
+  ol, ul { padding-left: 22px; }
+  code { background: var(--soft); padding: 2px 6px; border-radius: 5px; font-size: 14px; }
+  pre { background: var(--soft); border:1px solid var(--line); border-radius: 10px; padding: 14px 16px; overflow:auto; }
+  .limits { color: var(--muted); font-size: 14px; }
+  footer { margin-top: 56px; padding-top: 20px; border-top:1px solid var(--line); color: var(--muted); font-size: 14px; }
+  .warn { border-left: 3px solid #e0a100; background: #fffbeb; padding: 12px 16px; border-radius: 8px; font-size: 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>秘书鱼</h1>
+  <p class="tag">微信里的私人秘书。会记事、会催你、会在该说话的时候先开口。</p>
+
+  <div class="cta">
+    <a class="btn primary" data-repo="releases" href="#">下载最新版</a>
+    <a class="btn" data-repo="source" href="#">查看源码</a>
+  </div>
+
+  <div class="shot">
+    <img src="images/chat.png" alt="微信对话：早间问候与日程" onerror="this.style.display='none';this.parentNode.textContent='放一张微信对话截图到这里（docs/images/chat.png）';" />
+  </div>
+
+  <h2>它和普通聊天机器人有什么不同</h2>
+  <div class="grid">
+    <div class="card"><b>会主动找你</b><span>早上 7:30、睡前 23:00、滑冰前 30 分钟——时间是从你的行为里学出来的，不是写死的。</span></div>
+    <div class="card"><b>记得住</b><span>最近对话 + 长期事实卡 + 按需翻旧账，不用每次重新自我介绍。</span></div>
+    <div class="card"><b>认日程</b><span>「记一下：周五交报告」就能记；说一句做完了就标完成。</span></div>
+    <div class="card"><b>有性格</b><span>人设、语气、称呼、禁用词都能改，也能换模型。</span></div>
+  </div>
+
+  <h2>三步装上</h2>
+  <ol>
+    <li>装好 <b>DeepSeek Harness</b>（本插件依赖它提供模型与界面）</li>
+    <li>把本插件加进 profile 的 <code>dependencies</code> 与 <code>bundles</code>，重启 DSH</li>
+    <li>运行 <code>pnpm login</code>，用微信扫码</li>
+  </ol>
+  <pre>git clone https://github.com/<span data-repo-text>YOUR_NAME/mishu-fish</span>.git
+cd mishu-fish &amp;&amp; pnpm install &amp;&amp; pnpm build
+# 然后按 README 里的「装成 DSH 插件」操作</pre>
+
+  <h2>现在还不能做什么</h2>
+  <ul class="limits">
+    <li>只支持私聊，群聊收不到</li>
+    <li>只支持文字，图片和文件收发还没做</li>
+    <li>需要你的电脑一直开着</li>
+    <li>超过 24 小时没互动，她发不出主动消息</li>
+    <li>连续发约 10 条后，需要你先回一条才能继续</li>
+  </ul>
+
+  <p class="warn">
+    本插件使用的是<b>非官方接口</b>，没有稳定性承诺，账号可能被限制。项目不提供账号、不代登录、不收集任何数据——所有消息与凭据都只存在你自己的电脑上。
+  </p>
+
+  <footer>
+    MIT License · <a data-repo="source" href="#">GitHub</a> · 由 DeepSeek Harness 驱动
+  </footer>
+</div>
+<script>
+  // 部署到 GitHub Pages 时自动推断仓库地址；本地打开时保留占位
+  (function () {
+    var host = location.hostname || "";
+    var parts = location.pathname.split("/").filter(Boolean);
+    var isPages = /\.github\.io$/.test(host);
+    var owner = isPages ? host.split(".")[0] : "YOUR_NAME";
+    var repo = isPages && parts.length ? parts[0] : "mishu-fish";
+    var base = "https://github.com/" + owner + "/" + repo;
+    document.querySelectorAll("[data-repo]").forEach(function (el) {
+      el.setAttribute("href", el.getAttribute("data-repo") === "releases" ? base + "/releases/latest" : base);
+    });
+    document.querySelectorAll("[data-repo-text]").forEach(function (el) { el.textContent = owner + "/" + repo; });
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,1322 @@
+import { loadConfig, normalizeConfig, saveConfig } from "./config.js";
+import { createBridge, SESSION_WINDOW_MS } from "./bridge.js";
+import { generateReply, resolveRoute } from "./reply.js";
+import { createMemoryStore } from "./memory.js";
+import { createScheduleStore } from "./schedule.js";
+import { buildReportText, runDigest, runWeekly, weekKey } from "./digest.js";
+import { sendText } from "../ilink/bot.js";
+import { buildEscalationPrompt } from "./persona.js";
+import { completionCandidates, detectCompletion, detectQuery, formatAdded, formatList, isQuestion, itemsInRange, looksLikeItHasTime, matchTrigger } from "./schedule-intent.js";
+import { classifyCompletion, detectMessageIntent, parseScheduleText } from "./schedule-parse.js";
+import { clockMinutes, dayKey, greetingsDue } from "./reminder.js";
+import { canGreet, createRhythmStore, describeProfile, profileForDay } from "./rhythm.js";
+import { DEFAULT_LEAD_MINUTES, createHabitStore, discoverHabits, habitsDue, ruleText } from "./habits.js";
+import { generateProactive } from "./proactive.js";
+import { doneToday, repeatText } from "./schedule.js";
+import { itemLines } from "./format.js";
+import { execFile } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { filePath, homeDir } from "../config.js";
+import { createLogger } from "./logger.js";
+import { loadCredentials, loadState, saveCredentials } from "../store.js";
+const MAX_LOGS = 100;
+/**
+ * 插件宿主侧的「大脑」：配置、凭据、桥接、状态、日志都收在这里。
+ * lib/index.js 只负责 HTTP 接线，不写业务逻辑。
+ */
+export function createRuntime(options) {
+    const memory = options.memory ?? createMemoryStore();
+    const schedule = createScheduleStore();
+    const rhythm = createRhythmStore();
+    const habits = createHabitStore();
+    /** 写作业流程：先问用多久，再按估计间隔催，最多三次 */
+    let homeworkSession = null;
+    /** 最近一次问“这条过期的还要不要”的对象 */
+    let lastOverdueAsk = null;
+    let config = loadConfig();
+    let creds = options.credentials === undefined ? loadCredentials() : options.credentials;
+    let bridge = null;
+    let digestTimer = null;
+    let digestRunning = false;
+    let scheduleTimer = null;
+    /** 二次确认：等你回一句“对/是”，5 分钟内有效 */
+    let pendingConfirm = null;
+    function isConfirmYes(text) {
+        return /^(对|是|是的|嗯|确认|好的|好|没错|对呀)[。.!！]?$/.test(text.trim());
+    }
+    function isConfirmNo(text) {
+        return /^(不是|不对|错了|算了|取消)[。.!！]?$/.test(text.trim());
+    }
+    /** 第一次成功的路由；后续直接用它，避免每条消息都先撞一次缺 key 的路由 */
+    let chosenRoute = null;
+    const logger = createLogger(filePath('mishu.log'));
+    const usageFile = path.join(homeDir(), 'usage.jsonl');
+    // 面板和用量都是内存态；启动时从磁盘回填，避免一重启就“什么都没有”
+    let logs = loadRecentLogs(logger.jsonlFile);
+    let usageToday = loadUsageToday();
+    function loadRecentLogs(file) {
+        try {
+            const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).slice(-MAX_LOGS);
+            const entries = [];
+            for (const line of lines) {
+                try {
+                    const value = JSON.parse(line);
+                    if (value && typeof value.text === 'string' && (value.dir === 'in' || value.dir === 'out' || value.dir === 'sys')) {
+                        entries.push(value);
+                    }
+                }
+                catch {
+                    /* 单行坏了跳过 */
+                }
+            }
+            return entries;
+        }
+        catch {
+            return [];
+        }
+    }
+    function loadUsageToday() {
+        const startOfDay = new Date();
+        startOfDay.setHours(0, 0, 0, 0);
+        let calls = 0;
+        let input = 0;
+        let output = 0;
+        try {
+            for (const line of fs.readFileSync(usageFile, 'utf8').split('\n')) {
+                if (!line.trim())
+                    continue;
+                try {
+                    const value = JSON.parse(line);
+                    if (typeof value.at === 'number' && value.at >= startOfDay.getTime()) {
+                        calls += 1;
+                        input += Number(value.input) || 0;
+                        output += Number(value.output) || 0;
+                    }
+                }
+                catch {
+                    /* 坏行跳过 */
+                }
+            }
+        }
+        catch {
+            /* 还没有用量文件 */
+        }
+        return { date: new Date().toDateString(), calls, input, output };
+    }
+    let status = {
+        running: false,
+        accountId: creds?.accountId ?? '',
+        lastError: '',
+        lastMessageAt: null,
+        lastReplyAt: null,
+        tokenAgeMin: null,
+        windowLeftMin: null,
+        handled: 0,
+        startedAt: null,
+    };
+    function pushLog(entry) {
+        logs.push(entry);
+        if (logs.length > MAX_LOGS)
+            logs = logs.slice(-MAX_LOGS);
+        logger.write(entry);
+    }
+    function rollUsageDay() {
+        const today = new Date().toDateString();
+        if (usageToday.date !== today)
+            usageToday = { date: today, calls: 0, input: 0, output: 0 };
+    }
+    function recordUsage(rid, result, route) {
+        if (!result.usage)
+            return;
+        rollUsageDay();
+        usageToday.calls += 1;
+        usageToday.input += result.usage.input;
+        usageToday.output += result.usage.output;
+        try {
+            fs.appendFileSync(usageFile, `${JSON.stringify({ at: Date.now(), rid, provider: route.provider, model: route.model, input: result.usage.input, output: result.usage.output })}\n`, { mode: 0o600 });
+        }
+        catch {
+            /* 用量落盘失败不影响回复 */
+        }
+        pushLog({
+            at: Date.now(),
+            dir: 'sys',
+            rid,
+            text: `模型用量（${route.provider}/${route.model}）`,
+            usage: result.usage,
+        });
+    }
+    function readProviders() {
+        try {
+            const raw = options.llm.listProviders?.();
+            if (!Array.isArray(raw))
+                return [];
+            return raw
+                .map((item) => {
+                if (typeof item === 'string')
+                    return { provider: item, models: [] };
+                const value = (item ?? {});
+                // LlmProviderInfo 的字段是 { id, name }：id 才是路由键，name 只是给人看的。
+                // 之前把 name 当 id 用，导致路由变成 "DeepSeek Account"，服务端直接 NO_ADAPTER。
+                const provider = typeof value.id === 'string'
+                    ? value.id
+                    : typeof value.provider === 'string'
+                        ? value.provider
+                        : '';
+                const modelsRaw = Array.isArray(value.models)
+                    ? value.models
+                    : Array.isArray(value.modelIds)
+                        ? value.modelIds
+                        : [];
+                const models = modelsRaw
+                    .map((model) => {
+                    if (typeof model === 'string')
+                        return model;
+                    const id = model?.id;
+                    return typeof id === 'string' ? id : '';
+                })
+                    .filter(Boolean);
+                return { provider, models };
+            })
+                .filter((item) => item.provider);
+        }
+        catch {
+            return [];
+        }
+    }
+    function windowLeftMin() {
+        try {
+            const times = Object.values(loadState().contextTokens).map((entry) => entry.at);
+            if (times.length === 0)
+                return null;
+            const latest = Math.max(...times);
+            return Math.max(0, Math.round((SESSION_WINDOW_MS - (Date.now() - latest)) / 60000));
+        }
+        catch {
+            return null;
+        }
+    }
+    /**
+     * 候选路由：先试 DSH 的默认选择，再试其它 provider（优先带 account 的，
+     * 因为账号登录态不需要 API key），最后兜底任意一个。
+     */
+    function buildRoutes() {
+        const manual = config.model.mode === 'manual' && config.model.provider.trim();
+        if (manual) {
+            return [{ provider: config.model.provider.trim(), model: config.model.model.trim() || options.defaults.model }];
+        }
+        const routes = [];
+        const push = (route) => {
+            if (!route.provider || !route.model)
+                return;
+            if (routes.some((item) => item.provider === route.provider && item.model === route.model))
+                return;
+            routes.push(route);
+        };
+        push(options.defaults);
+        const others = readProviders().filter((item) => item.provider !== options.defaults.provider);
+        const account = others.filter((item) => /account/i.test(item.provider));
+        const rest = others.filter((item) => !/account/i.test(item.provider));
+        for (const provider of [...account, ...rest]) {
+            push({ provider: provider.provider, model: provider.models[0] ?? options.defaults.model });
+        }
+        // listProviders 万一没把账号路由列出来（例如适配器没 advertise 模型），
+        // 这里再兜两个已知的路由名：账号登录态优先，不需要 API key。
+        push({ provider: 'deepseek-account', model: 'deepseek-flash' });
+        push({ provider: 'deepseek-account', model: options.defaults.model });
+        return routes;
+    }
+    /** 当前最可能可用的路由：优先用验证过能跑通的，其次挑账号登录态那种不需要 key 的 */
+    function bestRoute() {
+        if (chosenRoute)
+            return chosenRoute;
+        const routes = buildRoutes();
+        return routes.find((route) => /account/i.test(route.provider)) ?? routes[0] ?? resolveRoute(config, options.defaults);
+    }
+    function computeStatus() {
+        const route = bestRoute();
+        return {
+            enabled: config.enabled,
+            running: bridge?.running ?? false,
+            accountId: creds?.accountId ?? '',
+            userId: creds?.userId ?? '',
+            lastError: status.lastError,
+            lastMessageAt: status.lastMessageAt,
+            lastReplyAt: status.lastReplyAt,
+            handled: logs.filter((entry) => entry.dir === 'out').length,
+            windowLeftMin: windowLeftMin(),
+            provider: route.provider,
+            model: route.model,
+        };
+    }
+    /**
+     * 从记忆里取“最近几条原文 + 事实卡 + 按需检索到的片段”。
+     * 检索只在消息命中触发词时发生，避免每条消息都翻旧账。
+     */
+    function memoryContext(userText) {
+        const mem = config.memory;
+        if (!mem.enabled)
+            return { history: [], facts: '', recall: '' };
+        try {
+            const entries = memory.recent(mem.recentCount, { scope: 'chat' });
+            const history = entries.map((entry) => ({
+                role: entry.role,
+                content: [{ type: 'text', text: entry.text }],
+            }));
+            const facts = mem.injectFacts ? memory.facts().slice(0, mem.factsLimit) : '';
+            let recall = '';
+            if (mem.recallEnabled && mem.triggerWords.some((word) => word && userText.includes(word))) {
+                const inWindow = new Set(entries.map((entry) => entry.at));
+                const matches = memory
+                    .search(userText, { days: 7, limit: mem.recallMaxLines, scope: 'chat' })
+                    .filter((match) => !inWindow.has(match.at));
+                recall = matches
+                    .map((match) => {
+                    const when = new Date(match.at).toLocaleString('zh-CN', {
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                    });
+                    return `- [${when}] ${match.role === 'user' ? '主人' : '秘书鱼'}：${match.text}`;
+                })
+                    .join('\n');
+                if (recall) {
+                    pushLog({ at: Date.now(), dir: 'sys', text: `检索到 ${matches.length} 条相关记忆`, rid: '-' });
+                }
+            }
+            return { history, facts, recall };
+        }
+        catch {
+            return { history: [], facts: '', recall: '' };
+        }
+    }
+    function pendingReportFile() {
+        return path.join(homeDir(), 'memory', 'pending-report.json');
+    }
+    function readPendingReport() {
+        try {
+            const value = JSON.parse(fs.readFileSync(pendingReportFile(), 'utf8'));
+            return typeof value.text === 'string' ? value.text : '';
+        }
+        catch {
+            return '';
+        }
+    }
+    function savePendingReport(text) {
+        try {
+            fs.mkdirSync(path.dirname(pendingReportFile()), { recursive: true, mode: 0o700 });
+            fs.writeFileSync(pendingReportFile(), JSON.stringify({ text, at: Date.now() }), { mode: 0o600 });
+        }
+        catch {
+            /* ignore */
+        }
+    }
+    function clearPendingReport() {
+        try {
+            fs.rmSync(pendingReportFile());
+        }
+        catch {
+            /* ignore */
+        }
+    }
+    /** 主动发一条给主人：需要凭据 + 最近的会话令牌（24 小时窗口） */
+    async function sendToOwner(text) {
+        if (!creds)
+            return false;
+        try {
+            const tokens = Object.entries(loadState().contextTokens).sort((a, b) => b[1].at - a[1].at);
+            const latest = tokens[0];
+            if (!latest)
+                return false;
+            await sendText(creds, latest[0], latest[1].token, text);
+            return true;
+        }
+        catch (err) {
+            pushLog({ at: Date.now(), dir: 'sys', level: 'warn', text: `主动发送失败：${err?.message ?? err}` });
+            return false;
+        }
+    }
+    async function flushPendingReport() {
+        const text = readPendingReport();
+        if (!text)
+            return;
+        if (await sendToOwner(text)) {
+            clearPendingReport();
+            pushLog({ at: Date.now(), dir: 'sys', text: '已补发挂起的日报' });
+        }
+    }
+    /**
+     * 立即跑一次摘要（默认处理“昨天”）。
+     * 5:00 的定时任务和设置页里的“立即执行”都走这里。
+     */
+    /** 从今天往回找最近有对话的一天；手动执行时用它，避免撞上空日期 */
+    function latestDayWithEntries() {
+        for (let offset = 0; offset < 7; offset++) {
+            const day = new Date();
+            day.setDate(day.getDate() - offset);
+            if (memory.day(day).length > 0)
+                return day;
+        }
+        return new Date();
+    }
+    async function runDigestNow(date) {
+        if (digestRunning)
+            return { ok: false, error: '上一次摘要还在跑' };
+        const target = date ?? latestDayWithEntries();
+        const label = `${target.getMonth() + 1} 月 ${target.getDate()} 日`;
+        pushLog({ at: Date.now(), dir: 'sys', text: `开始摘要：${label}` });
+        digestRunning = true;
+        try {
+            const result = await runDigest({ llm: options.llm, config, memory, route: bestRoute(), date: target });
+            if (!result) {
+                const label = `${target.getMonth() + 1} 月 ${target.getDate()} 日`;
+                pushLog({ at: Date.now(), dir: 'sys', level: 'warn', text: `摘要跳过：${label}没有对话记录` });
+                return { ok: false, error: `${label}没有对话记录，没什么可整理的` };
+            }
+            if (result.usage) {
+                rollUsageDay();
+                usageToday.calls += 1;
+                usageToday.input += result.usage.input;
+                usageToday.output += result.usage.output;
+                pushLog({
+                    at: Date.now(),
+                    dir: 'sys',
+                    text: `摘要用量（${bestRoute().provider}/${bestRoute().model}）`,
+                    usage: result.usage,
+                });
+                try {
+                    fs.appendFileSync(usageFile, `${JSON.stringify({ at: Date.now(), rid: 'digest', provider: bestRoute().provider, model: bestRoute().model, input: result.usage.input, output: result.usage.output })}\n`, { mode: 0o600 });
+                }
+                catch {
+                    /* ignore */
+                }
+            }
+            memory.writeSummary(target, result.summary);
+            if (result.facts) {
+                memory.writeFacts(result.facts);
+                // 事实卡每次变更留一份，方便回溯“这条是什么时候被写进去的”
+                try {
+                    fs.appendFileSync(path.join(homeDir(), 'memory', 'facts-history.jsonl'), `${JSON.stringify({ at: Date.now(), date: `${target.getMonth() + 1}-${target.getDate()}`, facts: result.facts })}\n`, { mode: 0o600 });
+                }
+                catch {
+                    /* ignore */
+                }
+            }
+            pushLog({
+                at: Date.now(),
+                dir: 'sys',
+                text: `摘要完成：${result.entries} 条原文 → ${result.summary.length} 字摘要、${result.facts.length} 字事实卡`,
+            });
+            const desc = describeProfile(profileForDay(rhythm.profile(manualPriors())));
+            const text = buildReportText(result, target) + (desc ? `\n\n作息参考：${desc}` : '');
+            let sent = false;
+            if (config.memory.dailyReport) {
+                sent = await sendToOwner(text);
+                if (sent)
+                    pushLog({ at: Date.now(), dir: 'sys', text: '日报已发送' });
+                else {
+                    savePendingReport(text);
+                    pushLog({ at: Date.now(), dir: 'sys', level: 'warn', text: '日报发不出去（窗口关闭），已挂起等下次说话补发' });
+                }
+            }
+            return { ok: true, report: text, sent, entries: result.entries };
+        }
+        catch (err) {
+            const message = err?.message ?? String(err);
+            pushLog({ at: Date.now(), dir: 'sys', level: 'warn', text: `摘要失败：${message}` });
+            return { ok: false, error: message };
+        }
+        finally {
+            digestRunning = false;
+        }
+    }
+    /** 每天 5 点那次是否已经跑过（用标记文件，而不是“摘要文件存在”）——
+     *  否则手动跑过一次当天摘要后，第二天 5 点会误以为已完成而跳过，丢掉后半夜的内容。 */
+    function scheduledMarkerFile() {
+        return path.join(homeDir(), 'memory', '.last-scheduled-digest');
+    }
+    function readScheduledMarker() {
+        try {
+            return fs.readFileSync(scheduledMarkerFile(), 'utf8').trim();
+        }
+        catch {
+            return '';
+        }
+    }
+    function writeScheduledMarker(day) {
+        try {
+            fs.mkdirSync(path.dirname(scheduledMarkerFile()), { recursive: true, mode: 0o700 });
+            const key = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
+            fs.writeFileSync(scheduledMarkerFile(), key, { mode: 0o600 });
+        }
+        catch {
+            /* ignore */
+        }
+    }
+    /** 放置 ~/.dsh/mishu-fish/run-digest 就会立刻跑一次摘要；给运维和调试用 */
+    function digestTriggerFile() {
+        return path.join(homeDir(), 'run-digest');
+    }
+    function checkDigestTrigger() {
+        try {
+            if (!fs.existsSync(digestTriggerFile()))
+                return;
+            fs.rmSync(digestTriggerFile());
+            pushLog({ at: Date.now(), dir: 'sys', text: '检测到 run-digest，手动触发摘要' });
+            void runDigestNow();
+        }
+        catch {
+            /* ignore */
+        }
+    }
+    function startDigestScheduler() {
+        if (digestTimer)
+            return;
+        const tick = () => {
+            try {
+                checkDigestTrigger();
+                if (!config.memory.enabled)
+                    return;
+                const [hour, minute] = config.memory.summaryTime.split(':').map(Number);
+                const now = new Date();
+                if (now.getHours() * 60 + now.getMinutes() < hour * 60 + minute)
+                    return;
+                const target = new Date(Date.now() - 24 * 60 * 60 * 1000);
+                const key = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(target.getDate()).padStart(2, '0')}`;
+                // 用标记文件判断“今天这次定时跑过没有”：手动跑过不会挡住它
+                if (readScheduledMarker() === key)
+                    return;
+                void runDigestNow(target).then((result) => {
+                    // 空日期也算“处理过”，否则每分钟都会重试一次，日志被刷满
+                    if (result.ok || /没有对话记录/.test(result.error ?? ''))
+                        writeScheduledMarker(target);
+                });
+            }
+            catch {
+                /* 调度失败不影响运行 */
+            }
+        };
+        digestTimer = setInterval(tick, 15_000);
+        digestTimer.unref?.();
+        const boot = setTimeout(tick, 8000);
+        boot.unref?.();
+    }
+    startDigestScheduler();
+    function windowsMarkerFile() {
+        return path.join(homeDir(), 'memory', '.schedule-windows.json');
+    }
+    function readWindowMarkers() {
+        try {
+            return JSON.parse(fs.readFileSync(windowsMarkerFile(), 'utf8'));
+        }
+        catch {
+            return {};
+        }
+    }
+    function writeWindowMarker(window, key) {
+        try {
+            const markers = readWindowMarkers();
+            markers[window] = key;
+            fs.mkdirSync(path.dirname(windowsMarkerFile()), { recursive: true, mode: 0o700 });
+            fs.writeFileSync(windowsMarkerFile(), JSON.stringify(markers), { mode: 0o600 });
+        }
+        catch {
+            /* ignore */
+        }
+    }
+    /** 系统通知兜底：按平台选实现，失败不影响主流程 */
+    function notifyDesktop(text) {
+        const body = text.slice(0, 200);
+        try {
+            if (process.platform === 'darwin') {
+                const script = `display notification ${JSON.stringify(body)} with title "秘书鱼"`;
+                execFile('osascript', ['-e', script], () => { });
+                return;
+            }
+            if (process.platform === 'win32') {
+                const escaped = body.replace(/'/g, "''");
+                const script = "Add-Type -AssemblyName System.Windows.Forms; " +
+                    "$n = New-Object System.Windows.Forms.NotifyIcon; " +
+                    "$n.Icon = [System.Drawing.SystemIcons]::Information; " +
+                    "$n.Visible = $true; " +
+                    `$n.ShowBalloonTip(5000, '秘书鱼', '${escaped}', 'Info'); ` +
+                    "Start-Sleep -Seconds 6; $n.Dispose()";
+                execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], () => { });
+                return;
+            }
+            // Linux：有 notify-send 就用，没有就算了
+            execFile('notify-send', ['秘书鱼', body], () => { });
+        }
+        catch {
+            /* 通知失败不影响主流程 */
+        }
+    }
+    /** 逾期超过 24 小时、还没问过的：返回要追加的问题（没有就空串） */
+    function overdueQuestion() {
+        const overdue = schedule
+            .list()
+            .filter((item) => item.status === 'pending' && !item.repeat && item.due)
+            .filter((item) => Date.now() - Date.parse(item.due) > 24 * 60 * 60 * 1000)
+            .filter((item) => !item.overdueAskedAt)
+            .sort((a, b) => Date.parse(a.due) - Date.parse(b.due))[0];
+        if (!overdue)
+            return '';
+        lastOverdueAsk = { id: overdue.id, title: overdue.title, at: Date.now() };
+        return `\n\n「${overdue.title}」已经过期一天了，还要保留吗？回「作废」我就删掉，不回就先留着。`;
+    }
+    function greetingContext(kind) {
+        const day = todayProfile();
+        const rhythmText = describeProfile(day);
+        if (kind === 'morning') {
+            return { today: itemLines(itemsInRange(schedule.list(), 'today')), rhythm: rhythmText };
+        }
+        const endOfToday = (() => {
+            const end = new Date();
+            end.setHours(23, 59, 59, 999);
+            return end.getTime();
+        })();
+        const unfinished = schedule
+            .list()
+            .filter((item) => item.status === 'pending' &&
+            ((item.due && Date.parse(item.due) < endOfToday) || (item.repeat && !doneToday(item))));
+        return {
+            unfinished: itemLines(unfinished),
+            tomorrow: itemLines(itemsInRange(schedule.list(), 'tomorrow')),
+            rhythm: rhythmText,
+        };
+    }
+    /** 早/晚各一条问候；内容由人设 + 事实卡 + 当天上下文生成 */
+    async function sendGreeting(kind) {
+        const now = new Date();
+        const day = todayProfile();
+        const weekend = [0, 6].includes(now.getDay());
+        if (!canGreet(day, weekend)) {
+            pushLog({
+                at: Date.now(),
+                dir: 'sys',
+                text: `${kind === 'morning' ? '早间' : '晚间'}问候跳过：样本不足（${day.wake?.samples ?? 0} 天），可在设置里手填作息`,
+            });
+            return { ok: false, error: '样本不足' };
+        }
+        const fallback = kind === 'morning' ? `早上好，${config.persona.callUser}。` : `晚上好，${config.persona.callUser}，早点休息。`;
+        let text = await composeProactive(kind, greetingContext(kind), fallback);
+        if (kind === 'evening')
+            text += overdueQuestion();
+        const sent = await sendToOwner(text);
+        if (!sent && config.schedule.notifyFallback)
+            notifyDesktop(text);
+        pushLog({
+            at: Date.now(),
+            dir: 'sys',
+            level: sent ? 'info' : 'warn',
+            text: `${kind === 'morning' ? '早间' : '晚间'}问候${sent ? '已发送' : '发不出去，已丢弃（不补发）'}`,
+        });
+        return { ok: true, text, sent };
+    }
+    /** 放 ~/.dsh/mishu-fish/run-greeting 就会立刻发一次；内容写 morning / evening */
+    async function checkWeeklyTrigger() {
+        const file = path.join(homeDir(), 'run-weekly');
+        try {
+            if (!fs.existsSync(file))
+                return false;
+            fs.rmSync(file);
+            const result = await runWeekly({ llm: options.llm, config, memory, route: bestRoute(), now: new Date() });
+            if (!result) {
+                pushLog({ at: Date.now(), dir: 'sys', level: 'warn', text: '周报：摘要不足，未生成' });
+                return true;
+            }
+            markWeekly(weekKey(new Date()));
+            const sent = await sendToOwner(result.text);
+            pushLog({ at: Date.now(), dir: 'sys', text: `手动触发周报：${sent ? '已发送' : '发送失败'}` });
+            return true;
+        }
+        catch (err) {
+            pushLog({ at: Date.now(), dir: 'sys', level: 'warn', text: `周报失败：${err?.message ?? err}` });
+            return true;
+        }
+    }
+    async function checkGreetingTrigger() {
+        const file = path.join(homeDir(), 'run-greeting');
+        try {
+            if (!fs.existsSync(file))
+                return false;
+            const raw = fs.readFileSync(file, 'utf8').trim();
+            fs.rmSync(file);
+            const kind = raw === 'morning' ? 'morning' : 'evening';
+            pushLog({ at: Date.now(), dir: 'sys', text: `检测到 run-greeting，立即发送${kind === 'morning' ? '早间' : '晚间'}问候` });
+            await sendGreeting(kind);
+            return true;
+        }
+        catch {
+            return false;
+        }
+    }
+    function weeklyMarkerFile() {
+        return path.join(homeDir(), 'memory', '.weekly.json');
+    }
+    function lastWeekly() {
+        try {
+            const value = JSON.parse(fs.readFileSync(weeklyMarkerFile(), 'utf8'));
+            return String(value.last ?? '');
+        }
+        catch {
+            return '';
+        }
+    }
+    function markWeekly(key) {
+        try {
+            fs.mkdirSync(path.dirname(weeklyMarkerFile()), { recursive: true, mode: 0o700 });
+            fs.writeFileSync(weeklyMarkerFile(), JSON.stringify({ last: key }), { mode: 0o600 });
+        }
+        catch {
+            /* ignore */
+        }
+    }
+    async function weeklyTick() {
+        if (!config.memory.enabled || !config.memory.weeklyReport)
+            return;
+        const now = new Date();
+        if (now.getDay() !== config.memory.weeklyDay)
+            return;
+        const target = clockMinutes(config.memory.weeklyTime);
+        if (target === null)
+            return;
+        const current = now.getHours() * 60 + now.getMinutes();
+        if (current < target || current >= target + 120)
+            return;
+        const key = weekKey(now);
+        if (lastWeekly() === key)
+            return;
+        const result = await runWeekly({ llm: options.llm, config, memory, route: bestRoute(), now });
+        if (!result) {
+            pushLog({ at: Date.now(), dir: 'sys', text: '周报跳过：最近 7 天有效摘要不足 2 天' });
+            return;
+        }
+        markWeekly(key);
+        const sent = await sendToOwner(result.text);
+        pushLog({
+            at: Date.now(),
+            dir: 'sys',
+            level: sent ? 'info' : 'warn',
+            text: `周报${sent ? '已发送' : '发不出去（本周不再重试）'}（${result.days} 天摘要）`,
+        });
+        if (!sent && config.schedule.notifyFallback)
+            notifyDesktop(result.text);
+    }
+    async function greetingTick() {
+        if (!config.rhythm.enabled)
+            return;
+        const now = new Date();
+        const today = dayKey(now);
+        for (const kind of greetingsDue({ morningGreeting: config.rhythm.morningGreeting, eveningGreeting: config.rhythm.eveningGreeting }, now)) {
+            const markerKey = `greeting-${kind}`;
+            if (readWindowMarkers()[markerKey] === today)
+                continue;
+            writeWindowMarker(markerKey, today);
+            await sendGreeting(kind);
+        }
+    }
+    function startScheduleScheduler() {
+        if (scheduleTimer)
+            return;
+        const tick = () => {
+            void checkWeeklyTrigger();
+            void checkGreetingTrigger();
+            void greetingTick();
+            void habitTick();
+            void weeklyTick();
+            homeworkNudgeTick();
+        };
+        scheduleTimer = setInterval(tick, 60_000);
+        scheduleTimer.unref?.();
+        const boot = setTimeout(tick, 12_000);
+        boot.unref?.();
+    }
+    startScheduleScheduler();
+    ensureHomeworkHabit();
+    syncHabits();
+    function proactiveHistoryFile() {
+        return path.join(homeDir(), 'memory', '.proactive.json');
+    }
+    function readProactiveHistory() {
+        try {
+            return JSON.parse(fs.readFileSync(proactiveHistoryFile(), 'utf8'));
+        }
+        catch {
+            return {};
+        }
+    }
+    function rememberProactive(kind, text) {
+        try {
+            const history = readProactiveHistory();
+            history[kind] = { text: text.slice(0, 300), at: Date.now() };
+            fs.mkdirSync(path.dirname(proactiveHistoryFile()), { recursive: true, mode: 0o700 });
+            fs.writeFileSync(proactiveHistoryFile(), JSON.stringify(history), { mode: 0o600 });
+        }
+        catch {
+            /* ignore */
+        }
+    }
+    /**
+     * 所有主动消息都走这里：人设 + 事实卡 + 当天上下文 + 上一次说过的话。
+     * 模型失败就回落到传入的固定模板，保证不会因为一次调用失败而彻底沉默。
+     */
+    async function composeProactive(kind, context, fallback) {
+        const facts = config.memory.enabled && config.memory.injectFacts ? memory.facts().slice(0, config.memory.factsLimit) : '';
+        const previous = readProactiveHistory()[kind]?.text;
+        try {
+            const text = await generateProactive(options.llm, bestRoute(), config, facts, { ...context, kind, previous });
+            if (text) {
+                rememberProactive(kind, text);
+                return text;
+            }
+            pushLog({ at: Date.now(), dir: 'sys', level: 'warn', text: `主动消息生成失败（${kind}）：模型返回空，用模板兜底` });
+        }
+        catch (err) {
+            pushLog({ at: Date.now(), dir: 'sys', level: 'warn', text: `主动消息生成失败（${kind}），用模板兜底：${err?.message ?? err}` });
+        }
+        rememberProactive(kind, fallback);
+        return fallback;
+    }
+    /** 从日程里同步习惯：显式重复项直接生效，反复出现的进候选 */
+    function syncHabits() {
+        try {
+            for (const input of discoverHabits(schedule.list(), habits.list())) {
+                habits.upsertCandidate(input);
+            }
+        }
+        catch (err) {
+            pushLog({ at: Date.now(), dir: 'sys', level: 'warn', text: `习惯同步失败：${err?.message ?? err}` });
+        }
+    }
+    /** 手动配置了作业时段、又没有对应习惯时，补一条 */
+    function ensureHomeworkHabit() {
+        const start = config.rhythm.homeworkStart;
+        if (!start)
+            return;
+        const exists = habits.list().some((habit) => habit.askEstimate && habit.status !== 'dismissed');
+        if (exists)
+            return;
+        habits.add({
+            label: '写作业',
+            category: '学习',
+            rule: { kind: 'daily', time: start },
+            leadMinutes: 30,
+            status: 'active',
+            source: 'explicit',
+            afterAsk: false,
+            askEstimate: true,
+        });
+    }
+    function habitContext(habit, kind) {
+        const parts = [
+            `这件事：${habit.label}（${habit.category}类）`,
+            `时间：${ruleText(habit.rule)}，提前 ${habit.leadMinutes} 分钟提醒`,
+        ];
+        if (habit.evidence.count > 0)
+            parts.push(`你已经见过这件事 ${habit.evidence.count} 次`);
+        return { extra: parts.join('\n') };
+    }
+    async function habitTick() {
+        if (!config.rhythm.enabled)
+            return;
+        const now = new Date();
+        const today = dayKey(now);
+        for (const entry of habitsDue(habits.list(), now, today)) {
+            const { habit, phase } = entry;
+            if (phase === 'remind') {
+                habits.markSent(habit.id, today);
+                if (habit.askEstimate) {
+                    homeworkSession = { startedAt: Date.now(), estimateMin: null, lastNudgeAt: Date.now(), count: 0 };
+                    rhythm.recordHomeworkStart(Date.now());
+                    const text = await composeProactive('homework-start', habitContext(habit, 'habit'), '该写作业了。你打算多久写完？');
+                    await sendToOwner(text);
+                    pushLog({ at: Date.now(), dir: 'sys', text: `习惯触发（问时长）：${habit.label}` });
+                    continue;
+                }
+                const text = await composeProactive('habit', habitContext(habit, 'habit'), `${config.persona.callUser}，${habit.label}的时间快到了。`);
+                const sent = await sendToOwner(text);
+                pushLog({
+                    at: Date.now(),
+                    dir: 'sys',
+                    level: sent ? 'info' : 'warn',
+                    text: `习惯触发：${habit.label}${sent ? '' : '（发送失败）'}`,
+                });
+                continue;
+            }
+            habits.markAfterAsk(habit.id, today);
+            const text = await composeProactive('habit-after', habitContext(habit, 'habit-after'), `${habit.label}弄完了吗？`);
+            await sendToOwner(text);
+            pushLog({ at: Date.now(), dir: 'sys', text: `习惯追问：${habit.label}` });
+        }
+    }
+    function manualPriors() {
+        return {
+            wake: config.rhythm.wakeTime,
+            sleep: config.rhythm.sleepTime,
+            homeworkStart: config.rhythm.homeworkStart,
+            homeworkEnd: config.rhythm.homeworkEnd,
+        };
+    }
+    function rhythmProfile() {
+        return rhythm.profile(manualPriors());
+    }
+    function todayProfile() {
+        return profileForDay(rhythmProfile());
+    }
+    /** “一个半小时”“45 分钟”“半小时” */
+    /** “一个半小时”“45 分钟”“两个小时”都认；中文数字也支持 */
+    function parseDurationMinutes(text) {
+        const cn = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+        const toNumber = (raw) => {
+            if (/^\d+(?:\.\d+)?$/.test(raw))
+                return Number(raw);
+            return cn[raw] ?? null;
+        };
+        // 先看“X个半小时”：一个半小时 = 90 分钟
+        const halfHour = /([一二两三四五六七八九十\d]+)\s*个?\s*半\s*(?:个)?\s*小时/.exec(text);
+        if (halfHour) {
+            const base = toNumber(halfHour[1]);
+            if (base !== null)
+                return Math.round((base + 0.5) * 60);
+        }
+        const hours = /([一二两三四五六七八九十\d]+(?:\.[05])?)\s*个?\s*小时/.exec(text);
+        if (hours) {
+            const base = toNumber(hours[1]);
+            if (base !== null)
+                return Math.round(base * 60);
+        }
+        const minutes = /(\d+)\s*分钟/.exec(text);
+        if (minutes)
+            return Number(minutes[1]);
+        if (/半(?:个)?小时/.test(text))
+            return 30;
+        return null;
+    }
+    /** 作业催促：只要有进行中的会话，就按估时间隔催；不再依赖配置的时段 */
+    function homeworkNudgeTick() {
+        if (!config.rhythm.enabled)
+            return;
+        if (!homeworkSession || homeworkSession.estimateMin === null)
+            return;
+        if (homeworkSession.count >= 3)
+            return;
+        // 短任务催得勤一点，长任务最多半小时一次
+        const interval = homeworkSession.estimateMin <= 60 ? 15 : 30;
+        if (Date.now() - homeworkSession.lastNudgeAt < interval * 60_000)
+            return;
+        homeworkSession.count += 1;
+        homeworkSession.lastNudgeAt = Date.now();
+        void composeProactive('homework-nudge', { extra: `他估计要写 ${homeworkSession.estimateMin} 分钟，已经催了 ${homeworkSession.count} 次。` }, '写完了吗？写完跟我说一声，我就不催了。').then((text) => sendToOwner(text));
+    }
+    /**
+     * 微信里的日程指令。命中就返回一句话，交给桥接直接发出去，不经过聊天模型。
+     * 顺序：新增 → 查询 → 完成。都不命中返回 null，走正常聊天。
+     */
+    async function quickReply(text, cfg, rid = '-') {
+        // 聊天里说“我要开始写作业了”：立刻进入流程，并记下开始时间
+        const wantsHomework = /(开始写作业|开始做作业|要写作业|准备写作业|写作业了|做作业了|写作业去)/.test(text);
+        if (cfg.rhythm.enabled && wantsHomework && !homeworkSession) {
+            homeworkSession = { startedAt: Date.now(), estimateMin: null, lastNudgeAt: Date.now(), count: 0 };
+            rhythm.recordHomeworkStart(Date.now());
+            pushLog({ at: Date.now(), dir: 'sys', rid, text: '开始写作业（记录下来，待问预计时长）' });
+            return composeProactive('homework-start', {}, '那你打算多久写完？给我个大概时间，我按这个节奏来问。');
+        }
+        // 写作业流程：结束/放弃/估时，都在这条通道里处理
+        if (cfg.rhythm.enabled && homeworkSession) {
+            const trimmed = text.trim();
+            if (/(写完了|做完了|交了|搞定了|弄完了)/.test(trimmed)) {
+                homeworkSession = null;
+                rhythm.recordHomeworkEnd(Date.now());
+                pushLog({ at: Date.now(), dir: 'sys', rid, text: '写作业结束（记录用时）' });
+                return '好，那今天就到这儿。';
+            }
+            if (/(不写|不做了|算了|今天不写|不想写)/.test(trimmed)) {
+                homeworkSession = null;
+                return '行，那今天不催了。';
+            }
+            if (homeworkSession.estimateMin === null) {
+                const minutes = parseDurationMinutes(trimmed);
+                if (minutes !== null) {
+                    homeworkSession.estimateMin = minutes;
+                    homeworkSession.lastNudgeAt = Date.now();
+                    return `好，${minutes} 分钟后我再来问一次。`;
+                }
+            }
+        }
+        // 逾期项的去留
+        if (lastOverdueAsk) {
+            const fresh = Date.now() - lastOverdueAsk.at < 48 * 60 * 60 * 1000;
+            const trimmed = text.trim();
+            if (fresh && /(作废|不要了|删掉|删了|不保留|取消)/.test(trimmed)) {
+                schedule.drop(lastOverdueAsk.id);
+                pushLog({ at: Date.now(), dir: 'sys', rid, text: `逾期任务作废：${lastOverdueAsk.title}` });
+                const title = lastOverdueAsk.title;
+                lastOverdueAsk = null;
+                return `好，「${title}」不再提醒了。`;
+            }
+            if (fresh && /(留着|保留|还要|不用删)/.test(trimmed)) {
+                schedule.markOverdueAsked(lastOverdueAsk.id);
+                const title = lastOverdueAsk.title;
+                lastOverdueAsk = null;
+                return `好，「${title}」先留着。`;
+            }
+            if (!fresh)
+                lastOverdueAsk = null;
+        }
+        if (!cfg.schedule.enabled)
+            return null;
+        // 上一次“要不要标记完成”的追问，先处理它
+        if (pendingConfirm) {
+            const fresh = Date.now() - pendingConfirm.at < 5 * 60_000;
+            if (fresh && isConfirmYes(text)) {
+                schedule.done(pendingConfirm.id);
+                pushLog({ at: Date.now(), dir: 'sys', rid, text: `完成日程（已确认）：${pendingConfirm.title}` });
+                const title = pendingConfirm.title;
+                pendingConfirm = null;
+                return `好，「${title}」标记完成了。`;
+            }
+            if (fresh && isConfirmNo(text)) {
+                const title = pendingConfirm.title;
+                pendingConfirm = null;
+                return `好，「${title}」先留着。`;
+            }
+            if (!fresh)
+                pendingConfirm = null;
+        }
+        const payload = matchTrigger(text, cfg.schedule.triggerWord);
+        if (payload !== null) {
+            if (!payload)
+                return `记什么？说一句内容，比如「${cfg.schedule.triggerWord}：周五交报告」。`;
+            let parsed = null;
+            try {
+                parsed = await parseScheduleText(options.llm, bestRoute(), payload);
+            }
+            catch (err) {
+                pushLog({ at: Date.now(), dir: 'sys', level: 'warn', rid, text: `日程解析失败：${err?.message ?? err}` });
+            }
+            if (!parsed) {
+                return '这次没解析成功，能用「记一下：内容 时间」再说一遍吗？';
+            }
+            const item = schedule.add({
+                title: parsed.title,
+                due: parsed.due,
+                repeat: parsed.repeat ?? null,
+                source: 'chat',
+                sourceText: payload,
+            });
+            pushLog({
+                at: Date.now(),
+                dir: 'sys',
+                rid,
+                text: `新增日程：${item.title}（${item.repeat ? repeatText(item) : item.due ? new Date(item.due).toLocaleString('zh-CN') : '无期限'}）`,
+            });
+            syncHabits();
+            const note = !parsed.repeat && !parsed.due && looksLikeItHasTime(payload) ? '没听出具体时间，先按无期限记' : undefined;
+            return formatAdded(item, note);
+        }
+        const range = detectQuery(text);
+        if (range) {
+            const list = itemsInRange(schedule.list(), range);
+            pushLog({ at: Date.now(), dir: 'sys', rid, text: `查询日程：${range}（${list.length} 条）` });
+            return formatList(list, range);
+        }
+        // 完成判断分两级：
+        //   1) 本地：完成语气 + 标题重合 → 直接判定
+        //   2) 语气不明但标题对得上 → 问模型一次（只在有候选时发生）
+        const all = schedule.list();
+        const strong = detectCompletion(text, all);
+        let completionCandidates_ = strong;
+        if (strong.length === 0 && !isQuestion(text)) {
+            const loose = completionCandidates(text, all);
+            if (loose.length > 0) {
+                try {
+                    const done = await classifyCompletion(options.llm, bestRoute(), text, loose.map((entry) => entry.item.title));
+                    pushLog({ at: Date.now(), dir: 'sys', rid, text: `完成判定（模型）：${done ? '是' : '否'}` });
+                    if (done)
+                        completionCandidates_ = loose;
+                }
+                catch (err) {
+                    pushLog({
+                        at: Date.now(),
+                        dir: 'sys',
+                        level: 'warn',
+                        rid,
+                        text: `完成判定失败：${err?.message ?? err}`,
+                    });
+                }
+            }
+        }
+        if (completionCandidates_.length > 0) {
+            if (completionCandidates_.length > 1) {
+                return `找到 ${completionCandidates_.length} 条相关的：${completionCandidates_
+                    .map((entry) => entry.item.title)
+                    .join('、')}。是哪一条？`;
+            }
+            const target = completionCandidates_[0].item;
+            if (cfg.schedule.confirmOnComplete) {
+                pendingConfirm = { id: target.id, title: target.title, at: Date.now() };
+                pushLog({ at: Date.now(), dir: 'sys', rid, text: `完成待确认：${target.title}` });
+                return `是把「${target.title}」标记成完成吗？回「是」或「不是」。`;
+            }
+            schedule.done(target.id);
+            pushLog({ at: Date.now(), dir: 'sys', rid, text: `完成日程：${target.title}` });
+            return `好，「${target.title}」标记完成了。`;
+        }
+        // 一次判断：这是日程、习惯，还是闲聊
+        const autoSchedule = !cfg.schedule.triggerWord;
+        const learnHabits = cfg.habits.learnFromChat;
+        if (autoSchedule || learnHabits) {
+            try {
+                const intent = await detectMessageIntent(options.llm, bestRoute(), text);
+                if (intent.kind === 'habit' && learnHabits) {
+                    const habit = habits.upsertCandidate({
+                        label: intent.label,
+                        rule: intent.rule,
+                        source: 'inferred',
+                        status: 'candidate',
+                        afterAsk: true,
+                        askEstimate: /作业|学习|复习|背单词/.test(intent.label),
+                    });
+                    if (habit) {
+                        pushLog({ at: Date.now(), dir: 'sys', rid, text: `发现习惯候选：${habit.label}（${ruleText(habit.rule)}）` });
+                        return `记下了：${habit.label} · ${ruleText(habit.rule)}。我先把它当习惯放着，你在设置里确认后我才会提前提醒。`;
+                    }
+                }
+                if (intent.kind === 'schedule' && autoSchedule) {
+                    const item = schedule.add({
+                        title: intent.title,
+                        due: intent.due,
+                        repeat: intent.repeat,
+                        source: 'chat',
+                        sourceText: text,
+                    });
+                    syncHabits();
+                    pushLog({ at: Date.now(), dir: 'sys', rid, text: `自动识别日程：${item.title}` });
+                    const note = !intent.repeat && !item.due && looksLikeItHasTime(text) ? '没听出具体时间，先按无期限记' : undefined;
+                    return formatAdded(item, note);
+                }
+            }
+            catch (err) {
+                pushLog({ at: Date.now(), dir: 'sys', level: 'warn', rid, text: `意图判断失败：${err?.message ?? err}` });
+            }
+        }
+        return null;
+    }
+    async function generate(text, currentConfig, rid = '-') {
+        // 有挂起的日报就先补发，再回当前这条
+        if (currentConfig.memory.enabled)
+            await flushPendingReport();
+        const routes = chosenRoute ? [chosenRoute] : buildRoutes();
+        const { history, facts, recall } = memoryContext(text);
+        // 先落用户这条，再生成；history 是落之前取的，所以不会把当前这条算进去
+        if (currentConfig.memory.enabled) {
+            memory.append({ at: Date.now(), role: 'user', text, scope: 'chat' });
+        }
+        const result = await generateReply(options.llm, currentConfig, text, routes, { history, facts, recall });
+        if (result.ok) {
+            if (!chosenRoute || chosenRoute.provider !== result.provider || chosenRoute.model !== result.model) {
+                chosenRoute = { provider: result.provider, model: result.model };
+                const fallback = result.provider !== options.defaults.provider;
+                pushLog({
+                    at: Date.now(),
+                    dir: 'sys',
+                    text: `模型路由：${result.provider}/${result.model}${fallback ? '（默认路由不可用，已自动回退）' : ''}`,
+                });
+            }
+        }
+        else {
+            pushLog({
+                at: Date.now(),
+                dir: 'sys',
+                rid,
+                level: 'warn',
+                text: `模型调用失败（试过 ${routes.map((r) => `${r.provider}/${r.model}`).join('、')}）：${result.error ?? '未知'}`,
+            });
+        }
+        if (result.ok) {
+            recordUsage(rid, result, { provider: result.provider, model: result.model });
+        }
+        if (currentConfig.memory.enabled && result.ok) {
+            memory.append({ at: Date.now(), role: 'assistant', text: result.text, scope: 'chat' });
+        }
+        return { text: result.text, ok: result.ok, error: result.error };
+    }
+    function ensureBridge() {
+        if (bridge)
+            return;
+        if (!creds) {
+            status = { ...status, lastError: '还没有机器人账号，需要先扫码登录' };
+            return;
+        }
+        bridge = createBridge({
+            creds,
+            getConfig: () => config,
+            onInbound: (text) => {
+                if (!config.rhythm.enabled)
+                    return;
+                const now = Date.now();
+                // “晚安 / 睡了”是明确的睡眠信号，比“最后一条消息”可靠
+                if (/(晚安|睡了|睡觉了|去睡|先睡了|要睡了)/.test(text))
+                    rhythm.recordSleep(now);
+                else
+                    rhythm.record(now);
+            },
+            generate,
+            quickReply,
+            escalate: options.escalate
+                ? async (task, cfg, rid = '-') => {
+                    const recent = cfg.memory.enabled && cfg.escalation.carryMemory
+                        ? memory.recent(Math.min(cfg.memory.recentCount, 8), { scope: 'chat' }).map((entry) => ({ role: entry.role, text: entry.text }))
+                        : [];
+                    const facts = cfg.memory.enabled && cfg.memory.injectFacts ? memory.facts().slice(0, cfg.memory.factsLimit) : '';
+                    const prompt = buildEscalationPrompt(cfg, { facts, recent, task });
+                    pushLog({
+                        at: Date.now(),
+                        dir: 'sys',
+                        rid,
+                        text: `后台上下文：人设${cfg.escalation.carryPersona ? '✓' : '✗'} 记忆${cfg.escalation.carryMemory ? '✓' : '✗'} 共 ${prompt.length} 字`,
+                    });
+                    const outcome = await options.escalate(prompt, cfg);
+                    if (cfg.memory.enabled && outcome.text) {
+                        memory.append({ at: Date.now(), role: 'user', text: task, scope: 'agent' });
+                        memory.append({ at: Date.now(), role: 'assistant', text: outcome.text, scope: 'agent' });
+                    }
+                    return outcome;
+                }
+                : undefined,
+            log: pushLog,
+            onStatus: (patch) => {
+                status = { ...status, ...patch };
+            },
+        });
+    }
+    function start() {
+        ensureBridge();
+        bridge?.start();
+        return computeStatus();
+    }
+    function stop() {
+        bridge?.stop();
+        return computeStatus();
+    }
+    function reloadCredentials(next) {
+        const wasRunning = bridge?.running ?? false;
+        bridge?.stop();
+        bridge = null;
+        creds = next === undefined ? loadCredentials() : next;
+        status = { ...status, accountId: creds?.accountId ?? '', lastError: '' };
+        if (wasRunning)
+            start();
+        return computeStatus();
+    }
+    return {
+        getConfig: () => config,
+        usageInfo: () => {
+            rollUsageDay();
+            return { ...usageToday };
+        },
+        memoryInfo: () => {
+            try {
+                const facts = memory.facts();
+                const recent = memory.recent(config.memory.recentCount, { scope: 'chat' });
+                const chars = facts.length + recent.reduce((sum, entry) => sum + entry.text.length, 0);
+                return {
+                    enabled: config.memory.enabled,
+                    facts: facts.slice(0, config.memory.factsLimit),
+                    factsChars: facts.length,
+                    recentCount: recent.length,
+                    approxExtraTokens: Math.round(chars / 1.6),
+                    dir: memory.dir,
+                };
+            }
+            catch {
+                return { enabled: false, facts: '', factsChars: 0, recentCount: 0, approxExtraTokens: 0, dir: '' };
+            }
+        },
+        writeFacts: (text) => {
+            memory.writeFacts(String(text ?? ''));
+            return { ok: true };
+        },
+        paths: () => ({
+            dataDir: homeDir(),
+            configFile: filePath('config.json'),
+            credentialsFile: filePath('credentials.json'),
+        }),
+        providers: readProviders,
+        bestRoute,
+        habits: () => habits.list(),
+        addHabit: (input) => habits.add(input),
+        updateHabit: (id, patch) => habits.update(id, patch),
+        removeHabit: (id) => habits.remove(id),
+        syncHabits: () => {
+            syncHabits();
+            return habits.list();
+        },
+        rhythmProfile: () => {
+            const profile = rhythmProfile();
+            const day = profileForDay(profile);
+            return {
+                weekday: profile.weekday,
+                weekend: profile.weekend,
+                today: day,
+                description: describeProfile(day),
+                canGreet: canGreet(day, [0, 6].includes(new Date().getDay())),
+                samples: day.wake?.samples ?? 0,
+                file: rhythm.file,
+            };
+        },
+        clearRhythm: () => {
+            rhythm.clear();
+            pushLog({ at: Date.now(), dir: 'sys', text: '作息样本已清空' });
+            return { ok: true };
+        },
+        recordActivity: (at = Date.now()) => {
+            if (!config.rhythm.enabled)
+                return;
+            rhythm.record(at);
+        },
+        scheduleList: () => schedule.list(),
+        scheduleAdd: (input) => schedule.add(input),
+        scheduleUpdate: (id, patch) => schedule.update(id, patch),
+        scheduleRemove: (id) => schedule.remove(id),
+        scheduleDone: (id) => schedule.done(id),
+        status: computeStatus,
+        logs: () => logs.slice(-MAX_LOGS),
+        updateConfig(patch) {
+            config = saveConfig(normalizeConfig({ ...config, ...patch }));
+            chosenRoute = null;
+            pushLog({ at: Date.now(), dir: 'sys', text: '配置已更新' });
+            return config;
+        },
+        start,
+        stop,
+        reloadCredentials,
+        saveNewCredentials(next) {
+            saveCredentials(next);
+            return reloadCredentials(next);
+        },
+        clearLogs() {
+            logs = [];
+        },
+        quickReply,
+        runGreeting: (kind) => sendGreeting(kind),
+        runDigestNow,
+        digestState: () => ({ running: digestRunning, pending: Boolean(readPendingReport()) }),
+        dispose() {
+            bridge?.stop();
+            bridge = null;
+            if (digestTimer) {
+                clearInterval(digestTimer);
+                digestTimer = null;
+            }
+            if (scheduleTimer) {
+                clearInterval(scheduleTimer);
+                scheduleTimer = null;
+            }
+        },
+        pushLog,
+    };
+}

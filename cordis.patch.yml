@@ -1,0 +1,14 @@
+# ============================================================================
+# mishu-fish —— 秘书鱼 · DSH bundle patch
+# ============================================================================
+# 安装：
+#   dsh plugin --profile desktop add "link:/Users/<你>/Documents/deepseek-harness/default-workspace/mishu-fish"
+# 装完重启 DSH，设置里会出现「秘书鱼」。
+#
+# ⚠️ `name:` 必须与 package.json 的包名一致（这里是 mishu-fish），
+#    否则表现为「装上了但设置里没有」。
+# ============================================================================
+
+- insert:
+    - id: mishu-fish
+      name: mishu-fish
