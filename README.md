@@ -1,5 +1,7 @@
 # 秘书鱼 · mishu-fish
 
+> Secretary Fish — 一个住进微信里的私人秘书，DeepSeek Harness 插件。
+
 微信里的私人秘书。用**腾讯 iLink Bot API**（ClawBot 官方通道）接入一个机器人账号，在 DSH 的设置里改她的人设、语气和行为。
 
 - 设置 → **秘书鱼**：状态、人设、表达、行为、习惯、作息、日程、记忆、模型、日志
