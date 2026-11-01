@@ -66,9 +66,9 @@ dsh plugin --profile desktop add "link:<你的本地路径>/mishu-fish"
 
 ## 二、截图
 
-![微信对话](docs/images/chat.png)
+> 截图待补。放好之后把这一行换成 `![微信对话](docs/images/chat.png)` 即可。
 
-（截图放 `docs/images/`，说明见 `docs/RELEASE.md`）
+（截图要求见 `docs/RELEASE.md`）
 
 ## 三、设置页里有什么
 

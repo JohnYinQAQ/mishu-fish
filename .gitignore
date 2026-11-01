@@ -9,3 +9,8 @@ node_modules/
 
 # 本地打出来的发布包
 release/
+
+# 本地用的推送脚本，不进仓库
+一键推送到GitHub.command
+
+用token推送.command
