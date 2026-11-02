@@ -193,3 +193,32 @@ test('recordHomeworkEnd：没有开始记录时不会崩', () => {
   const store = createRhythmStore()
   assert.doesNotThrow(() => store.recordHomeworkEnd(Date.now()))
 })
+
+test('跨零点写作业：能正确结束，但不参与时段学习', () => {
+  const store = createRhythmStore()
+  for (const day of [26, 27, 28]) {
+    store.recordHomeworkStart(new Date(2026, 9, day, 23, 0, 0).getTime())
+    store.recordHomeworkEnd(new Date(2026, 9, day + 1, 1, 0, 0).getTime())
+  }
+
+  const sessions = store.days().flatMap((day) => day.homework ?? [])
+  assert.equal(sessions.length, 3)
+  for (const session of sessions) {
+    assert.equal(session.start, 23 * 60)
+    assert.equal(session.end, 25 * 60, '跨零点记成 24 小时之后的数')
+  }
+  // 跨零点的不参与学习，避免起止反掉
+  assert.equal(store.profile(EMPTY, new Date(2026, 9, 30)).weekday.homework, null)
+})
+
+test('同一天内结束的作业仍能学出时段', () => {
+  const store = createRhythmStore()
+  for (const day of [26, 27, 28]) {
+    store.recordHomeworkStart(new Date(2026, 9, day, 20, 0, 0).getTime())
+    store.recordHomeworkEnd(new Date(2026, 9, day, 22, 0, 0).getTime())
+  }
+  const hw = store.profile(EMPTY, new Date(2026, 9, 30)).weekday.homework
+  assert.ok(hw)
+  assert.equal(hw!.start, 20 * 60)
+  assert.equal(hw!.end, 22 * 60)
+})

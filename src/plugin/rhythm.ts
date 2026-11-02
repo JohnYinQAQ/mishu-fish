@@ -152,7 +152,11 @@ function profileFor(days: DaySample[], manual: ManualPriors, weekend: boolean, n
 
   // 没有手动配置时，从“开始写作业”的记录里学
   if (!homework) {
-    const sessions = picked.flatMap((day) => day.homework ?? []).filter((session) => typeof session.end === 'number')
+    // 只学“当天内结束”的时段；跨零点的不参与，否则起止会反掉
+    const sessions = picked
+      .flatMap((day) => day.homework ?? [])
+      .filter((session) => typeof session.end === 'number')
+      .filter((session) => (session.end as number) > session.start && (session.end as number) <= 1440)
     if (sessions.length >= 3) {
       homework = {
         start: median(sessions.map((session) => session.start)),
@@ -260,10 +264,21 @@ export function createRhythmStore(baseDir?: string): RhythmStore {
       const date = new Date(at)
       const minutes = date.getHours() * 60 + date.getMinutes()
       const days = read()
-      const day = days.find((entry) => entry.date === dateKey(date))
-      if (!day?.homework?.length) return
-      const last = day.homework[day.homework.length - 1]
-      if (typeof last.end !== 'number') last.end = minutes
+
+      // 先看今天有没有没结束的；没有就看昨天——跨零点写作业会落在昨天的记录里
+      const today = days.find((entry) => entry.date === dateKey(date))
+      let target = today?.homework?.slice().reverse().find((session) => typeof session.end !== 'number')
+
+      if (!target) {
+        const yesterday = new Date(date)
+        yesterday.setDate(yesterday.getDate() - 1)
+        const prev = days.find((entry) => entry.date === dateKey(yesterday))
+        target = prev?.homework?.slice().reverse().find((session) => typeof session.end !== 'number')
+      }
+
+      if (!target) return
+      // 结束时刻早于开始，说明跨了零点：记成 24 小时制之后的数
+      target.end = minutes < target.start ? minutes + 1440 : minutes
       write(days)
     },
 
