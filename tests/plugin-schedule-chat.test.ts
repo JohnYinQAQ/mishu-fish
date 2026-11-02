@@ -25,15 +25,15 @@ function llmReturning(payload: unknown, options: { throws?: boolean } = {}): Llm
 
 function makeRuntime(llm: LlmService) {
   const runtime = createRuntime({ llm, defaults: { provider: 'deepseek-account', model: 'deepseek-flash' } })
-  // 这些用例测的是日程/完成/习惯，首次自我介绍会抢在前面，默认关掉
-  runtime.updateConfig({ onboarding: { welcome: false } })
+  // 这些用例测的是日程/完成/习惯；自我介绍和模型回复都会引入不确定性，默认关掉
+  runtime.updateConfig({ onboarding: { welcome: false }, reply: { modelReplies: false } })
   return runtime
 }
 
 /** 需要测首次介绍的用例用这个 */
 function makeRuntimeWithWelcome(llm: LlmService) {
   const runtime = createRuntime({ llm, defaults: { provider: 'deepseek-account', model: 'deepseek-flash' } })
-  runtime.updateConfig({ onboarding: { welcome: true } })
+  runtime.updateConfig({ onboarding: { welcome: true }, reply: { modelReplies: false } })
   return runtime
 }
 
@@ -497,5 +497,62 @@ test('“我准备去打游戏”：静默记一次活动，不打断聊天', as
   assert.equal(reply, null, '第一次只记录，不回复')
   assert.equal(runtime.activities().entries, 1)
   assert.equal(runtime.habits().length, 0, '一次还不够升级成习惯')
+  runtime.dispose()
+})
+
+test('模型回复：新增日程的确认由模型生成，但仍带上事项和时间', async () => {
+  const llm: LlmService = {
+    stream(options: Record<string, unknown>) {
+      const system = String(options.system ?? '')
+      const payload = system.includes('分成三类')
+        ? { kind: 'schedule', title: '交报告', due: '2026-11-06T15:00', repeat: null }
+        : { title: '交报告', due: '2026-11-06T15:00' }
+      return (async function* () {
+        yield {
+          type: 'text-delta',
+          index: 0,
+          text: system.includes('这次的任务') && system.includes('确认你记下')
+            ? '记好啦主人，周五下午三点的报告我盯着喵。'
+            : JSON.stringify(payload),
+        }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+    listProviders() {
+      return [{ id: 'deepseek-account', name: 'DeepSeek Account' }]
+    },
+  }
+  const runtime = makeRuntime(llm)
+  runtime.updateConfig({ reply: { modelReplies: true } })
+
+  const reply = await runtime.quickReply('记一下：周五下午三点交报告', runtime.getConfig())
+  assert.equal(reply, '记好啦主人，周五下午三点的报告我盯着喵。')
+  assert.equal(runtime.scheduleList().length, 1)
+  runtime.dispose()
+})
+
+test('模型回复失败时回落到固定文案', async () => {
+  const llm: LlmService = {
+    stream(options: Record<string, unknown>) {
+      const system = String(options.system ?? '')
+      return (async function* () {
+        if (system.includes('这次的任务')) throw new Error('模型挂了')
+        yield {
+          type: 'text-delta',
+          index: 0,
+          text: JSON.stringify({ title: '交报告', due: '2026-11-06T15:00' }),
+        }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+    listProviders() {
+      return [{ id: 'deepseek-account', name: 'DeepSeek Account' }]
+    },
+  }
+  const runtime = makeRuntime(llm)
+  runtime.updateConfig({ reply: { modelReplies: true } })
+
+  const reply = await runtime.quickReply('记一下：周五下午三点交报告', runtime.getConfig())
+  assert.match(reply!, /记下了/)
   runtime.dispose()
 })

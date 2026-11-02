@@ -49,6 +49,9 @@ export const DEFAULT_CONFIG = {
     onboarding: {
         welcome: true,
     },
+    reply: {
+        modelReplies: true,
+    },
     rhythm: {
         enabled: true,
         wakeTime: '',
@@ -128,6 +131,7 @@ export function normalizeConfig(raw) {
     const rhythm = (input.rhythm ?? {});
     const habits = (input.habits ?? {});
     const onboarding = (input.onboarding ?? {});
+    const reply = (input.reply ?? {});
     const banned = Array.isArray(persona.bannedWords)
         ? persona.bannedWords
             .filter((word) => typeof word === 'string')
@@ -191,6 +195,9 @@ export function normalizeConfig(raw) {
         },
         onboarding: {
             welcome: bool(onboarding.welcome, DEFAULT_CONFIG.onboarding.welcome),
+        },
+        reply: {
+            modelReplies: bool(reply.modelReplies, DEFAULT_CONFIG.reply.modelReplies),
         },
         rhythm: {
             enabled: bool(rhythm.enabled, DEFAULT_CONFIG.rhythm.enabled),

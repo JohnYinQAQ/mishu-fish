@@ -149,3 +149,68 @@ export async function generateProactive(
   const second = await attempt(minimal.system, minimal.user)
   return second ? second.slice(0, 500) : null
 }
+
+export interface ReplySpec {
+  /** 这次要做什么，给模型的指令 */
+  instruction: string
+  /** 必须保留的事实，一行一条 */
+  data: string[]
+  /** 模型失败时退回的固定文案 */
+  fallback: string
+}
+
+/**
+ * 用模型“说一句回复”。规则和主动消息一致（人设 + 事实卡 + 当前时间），
+ * 但额外要求：只输出这句话本身，并且必须保留传入的事实。
+ */
+export async function composeReply(
+  llm: LlmService,
+  route: Route,
+  config: AppConfig,
+  facts: string,
+  spec: ReplySpec,
+  now: Date = new Date(),
+): Promise<string> {
+  const system = [
+    buildSystemPrompt(config, facts, undefined, now),
+    '',
+    '## 这次的任务',
+    spec.instruction,
+    '',
+    '## 硬性要求',
+    '- 只输出你要对他说的那句话，不要解释、不要加引号、不要 Markdown。',
+    `- 不超过 ${Math.max(80, config.style.maxChars)} 字。`,
+    '- 下面给你的事实必须原样保留（时间、清单条目、数字），不要改、不要漏、不要编新的。',
+    '- 按人设说话，不要客服腔。',
+  ].join('\n')
+
+  const user = spec.data.join('\n')
+  const signal = AbortSignal.timeout(30_000)
+
+  let text = ''
+  let failure = ''
+  const stream = llm.stream({
+    provider: route.provider,
+    model: route.model,
+    system,
+    messages: [{ role: 'user', content: [{ type: 'text', text: user }] }],
+    temperature: 0.7,
+    maxTokens: 400,
+    signal,
+  })
+  for await (const chunk of stream) {
+    const value = (chunk ?? {}) as Record<string, unknown>
+    if (value.type === 'finish') {
+      const reason = (value.reason ?? {}) as Record<string, unknown>
+      if (reason.kind === 'error') {
+        const fail = (reason.failure ?? {}) as Record<string, unknown>
+        failure = [fail.code, fail.message].filter(Boolean).join(': ') || '模型调用失败'
+      }
+    }
+    if (value.type === 'text-delta' && typeof value.text === 'string') text += value.text
+  }
+  if (failure) throw new Error(failure)
+  const clean = stripMarkdown(text).trim()
+  if (!clean) throw new Error('模型返回空')
+  return clean.slice(0, 600)
+}

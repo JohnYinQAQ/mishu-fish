@@ -11,14 +11,14 @@ import { sendText } from '../ilink/bot.ts'
 import type { MemoryStore } from './memory.ts'
 import type { ChatMessage } from './persona.ts'
 import { buildEscalationPrompt } from './persona.ts'
-import { completionCandidates, detectCompletion, detectQuery, formatAdded, formatList, inferDueFromText, isQuestion, itemsInRange, looksLikeItHasTime, matchTrigger } from './schedule-intent.ts'
+import { completionCandidates, detectCompletion, detectQuery, formatAdded, formatList, inferDueFromText, isQuestion, itemsInRange, looksLikeItHasTime, matchTrigger, rangeLabel } from './schedule-intent.ts'
 import { classifyCompletion, detectActivity, detectMessageIntent, parseScheduleText } from './schedule-parse.ts'
 import { clockMinutes, dayKey, greetingsDue } from './reminder.ts'
 import { canGreet, createRhythmStore, describeProfile, profileForDay } from './rhythm.ts'
 import { DEFAULT_LEAD_MINUTES, createHabitStore, discoverHabits, habitsDue, ruleText } from './habits.ts'
 import { createActivityStore, describeActivity, toHabitInput } from './activities.ts'
 import type { Habit } from './habits.ts'
-import { generateProactive } from './proactive.ts'
+import { composeReply, generateProactive } from './proactive.ts'
 import type { ProactiveContext, ProactiveKind } from './proactive.ts'
 import { doneToday, repeatText } from './schedule.ts'
 import { itemLines } from './format.ts'
@@ -847,6 +847,28 @@ export function createRuntime(options: {
    * 所有主动消息都走这里：人设 + 事实卡 + 当天上下文 + 上一次说过的话。
    * 模型失败就回落到传入的固定模板，保证不会因为一次调用失败而彻底沉默。
    */
+  /**
+   * 说一句给用户看的话：默认走模型，失败或关掉时用固定文案。
+   * 结构化事实通过 data 传进去，要求模型原样保留。
+   */
+  async function say(
+    cfg: AppConfig,
+    instruction: string,
+    data: string[],
+    fallback: string,
+    rid = '-',
+  ): Promise<string> {
+    if (!cfg.reply.modelReplies) return fallback
+    const facts =
+      config.memory.enabled && config.memory.injectFacts ? memory.facts().slice(0, config.memory.factsLimit) : ''
+    try {
+      return await composeReply(options.llm, bestRoute(), config, facts, { instruction, data, fallback })
+    } catch (err) {
+      pushLog({ at: Date.now(), dir: 'sys', level: 'warn', rid, text: `回复生成失败，用模板兜底：${(err as Error)?.message ?? err}` })
+      return fallback
+    }
+  }
+
   async function composeProactive(kind: ProactiveKind, context: Omit<ProactiveContext, 'kind' | 'previous'>, fallback: string): Promise<string> {
     const facts =
       config.memory.enabled && config.memory.injectFacts ? memory.facts().slice(0, config.memory.factsLimit) : ''
@@ -1057,18 +1079,24 @@ export function createRuntime(options: {
         homeworkSession = null
         rhythm.recordHomeworkEnd(Date.now())
         pushLog({ at: Date.now(), dir: 'sys', rid, text: '写作业结束（记录用时）' })
-        return '好，那今天就到这儿。'
+        return say(cfg, '他写完了作业，收个尾，别继续催。', ['状态：作业已完成'], '好，那今天就到这儿。', rid)
       }
       if (/(不写|不做了|算了|今天不写|不想写)/.test(trimmed)) {
         homeworkSession = null
-        return '行，那今天不催了。'
+        return say(cfg, '他今天不想写，答应不再催。', ['状态：今天不写作业'], '行，那今天不催了。', rid)
       }
       if (homeworkSession.estimateMin === null) {
         const minutes = parseDurationMinutes(trimmed)
         if (minutes !== null) {
           homeworkSession.estimateMin = minutes
           homeworkSession.lastNudgeAt = Date.now()
-          return `好，${minutes} 分钟后我再来问一次。`
+          return say(
+            cfg,
+            '确认收到预计时长，告诉他你会按这个时间再来问。',
+            [`预计时长：${minutes} 分钟`],
+            `好，${minutes} 分钟后我再来问一次。`,
+            rid,
+          )
         }
       }
     }
@@ -1082,13 +1110,13 @@ export function createRuntime(options: {
         pushLog({ at: Date.now(), dir: 'sys', rid, text: `逾期任务作废：${lastOverdueAsk.title}` })
         const title = lastOverdueAsk.title
         lastOverdueAsk = null
-        return `好，「${title}」不再提醒了。`
+        return say(cfg, '确认这件过期的安排不再提醒了。', [`已作废：${title}`], `好，「${title}」不再提醒了。`, rid)
       }
       if (fresh && /(留着|保留|还要|不用删)/.test(trimmed)) {
         schedule.markOverdueAsked(lastOverdueAsk.id)
         const title = lastOverdueAsk.title
         lastOverdueAsk = null
-        return `好，「${title}」先留着。`
+        return say(cfg, '确认这件过期的安排先留着。', [`保留：${title}`], `好，「${title}」先留着。`, rid)
       }
       if (!fresh) lastOverdueAsk = null
     }
@@ -1115,7 +1143,15 @@ export function createRuntime(options: {
 
     const payload = matchTrigger(text, cfg.schedule.triggerWord)
     if (payload !== null) {
-      if (!payload) return `记什么？说一句内容，比如「${cfg.schedule.triggerWord}：周五交报告」。`
+      if (!payload) {
+        return say(
+          cfg,
+          '他用了触发词但没说记什么，问一句要记什么，给个例子。',
+          [`触发词：${cfg.schedule.triggerWord}`],
+          `记什么？说一句内容，比如「${cfg.schedule.triggerWord}：周五交报告」。`,
+          rid,
+        )
+      }
 
       let parsed = null
       try {
@@ -1124,7 +1160,13 @@ export function createRuntime(options: {
         pushLog({ at: Date.now(), dir: 'sys', level: 'warn', rid, text: `日程解析失败：${(err as Error)?.message ?? err}` })
       }
       if (!parsed) {
-        return '这次没解析成功，能用「记一下：内容 时间」再说一遍吗？'
+        return say(
+          cfg,
+          '这次没解析出内容，请他换个说法再说一遍。',
+          ['状态：解析失败'],
+          '这次没解析成功，能用「记一下：内容 时间」再说一遍吗？',
+          rid,
+        )
       }
 
       const { due, note } = resolveDue(parsed, payload)
@@ -1144,14 +1186,30 @@ export function createRuntime(options: {
         }）`,
       })
       syncHabits()
-      return formatAdded(item, note)
+      return say(
+        cfg,
+        '确认你记下了一件事。必须保留事项名称和时间；如果没听出时间，用一句话说明你按无期限记了。',
+        [
+          `事项：${item.title}`,
+          `时间：${item.due ? new Date(item.due).toLocaleString('zh-CN') : '无期限'}`,
+          ...(note ? [`备注：${note}`] : []),
+        ],
+        formatAdded(item, note),
+        rid,
+      )
     }
 
     const range = detectQuery(text)
     if (range) {
       const list = itemsInRange(schedule.list(), range)
       pushLog({ at: Date.now(), dir: 'sys', rid, text: `查询日程：${range}（${list.length} 条）` })
-      return formatList(list, range)
+      return say(
+        cfg,
+        '回答他的日程查询。没有安排就照实说没有；有安排就逐条列出，不要增删条目。',
+        list.length === 0 ? [`范围：${rangeLabel(range)}`, '结果：没有安排'] : [`范围：${rangeLabel(range)}`, ...list.map((entry) => `· ${entry.title}${entry.due ? `（${new Date(entry.due).toLocaleString('zh-CN')}）` : '（无期限）'}`)],
+        formatList(list, range),
+        rid,
+      )
     }
 
     // 完成判断分两级：
@@ -1182,19 +1240,31 @@ export function createRuntime(options: {
 
     if (completionCandidates_.length > 0) {
       if (completionCandidates_.length > 1) {
-        return `找到 ${completionCandidates_.length} 条相关的：${completionCandidates_
-          .map((entry) => entry.item.title)
-          .join('、')}。是哪一条？`
+        return say(
+          cfg,
+          '有多件事对得上，问他指的是哪一件，把候选都列出来。',
+          completionCandidates_.map((entry) => `· ${entry.item.title}`),
+          `找到 ${completionCandidates_.length} 条相关的：${completionCandidates_
+            .map((entry) => entry.item.title)
+            .join('、')}。是哪一条？`,
+          rid,
+        )
       }
       const target = completionCandidates_[0].item
       if (cfg.schedule.confirmOnComplete) {
         pendingConfirm = { id: target.id, title: target.title, at: Date.now() }
         pushLog({ at: Date.now(), dir: 'sys', rid, text: `完成待确认：${target.title}` })
-        return `是把「${target.title}」标记成完成吗？回「是」或「不是」。`
+        return say(
+          cfg,
+          '向他确认这件事是不是做完了，告诉他回「是」或「不是」。',
+          [`待确认：${target.title}`],
+          `是把「${target.title}」标记成完成吗？回「是」或「不是」。`,
+          rid,
+        )
       }
       schedule.done(target.id)
       pushLog({ at: Date.now(), dir: 'sys', rid, text: `完成日程：${target.title}` })
-      return `好，「${target.title}」标记完成了。`
+      return say(cfg, '确认他把这件事做完了，语气轻松。', [`已完成：${target.title}`], `好，「${target.title}」标记完成了。`, rid)
     }
 
     // “我准备去打游戏”这类：静默记一次活动，攒够次数再建议成习惯
@@ -1222,7 +1292,13 @@ export function createRuntime(options: {
                   rid,
                   text: `从活动推断出习惯候选：${habit.label}（${describeActivity(candidate)}）`,
                 })
-                return `我注意到你${describeActivity(candidate)}。要不要把它设成习惯？我在设置里放了个候选，你确认后我才会在事前提醒你。`
+                return say(
+                  cfg,
+                  '你发现了他一个重复出现的规律，想建议设成习惯。说清楚：时间、做什么、要他去设置里确认才会开始提醒。',
+                  [`规律：${describeActivity(candidate)}`],
+                  `我注意到你${describeActivity(candidate)}。要不要把它设成习惯？我在设置里放了个候选，你确认后我才会在事前提醒你。`,
+                  rid,
+                )
               }
             }
           }
@@ -1265,7 +1341,17 @@ export function createRuntime(options: {
           })
           syncHabits()
           pushLog({ at: Date.now(), dir: 'sys', rid, text: `自动识别日程：${item.title}` })
-          return formatAdded(item, note)
+          return say(
+            cfg,
+            '确认你记下了一件事。必须保留事项名称和时间；如果没听出时间，用一句话说明你按无期限记了。',
+            [
+              `事项：${item.title}`,
+              `时间：${item.due ? new Date(item.due).toLocaleString('zh-CN') : '无期限'}`,
+              ...(note ? [`备注：${note}`] : []),
+            ],
+            formatAdded(item, note),
+            rid,
+          )
         }
       } catch (err) {
         pushLog({ at: Date.now(), dir: 'sys', level: 'warn', rid, text: `意图判断失败：${(err as Error)?.message ?? err}` })

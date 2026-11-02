@@ -110,6 +110,11 @@ export interface RhythmConfig {
   eveningGreeting: string
 }
 
+export interface BehaviorReplyConfig {
+  /** 所有对用户的回复都走模型生成（测试里可关掉，保证断言稳定） */
+  modelReplies: boolean
+}
+
 export interface OnboardingConfig {
   /** 第一次对话时先做自我介绍和征询 */
   welcome: boolean
@@ -134,6 +139,7 @@ export interface AppConfig {
   rhythm: RhythmConfig
   habits: HabitsConfig
   onboarding: OnboardingConfig
+  reply: BehaviorReplyConfig
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -179,6 +185,9 @@ export const DEFAULT_CONFIG: AppConfig = {
   },
   onboarding: {
     welcome: true,
+  },
+  reply: {
+    modelReplies: true,
   },
   rhythm: {
     enabled: true,
@@ -260,6 +269,7 @@ export function normalizeConfig(raw: unknown): AppConfig {
   const rhythm = (input.rhythm ?? {}) as Record<string, unknown>
   const habits = (input.habits ?? {}) as Record<string, unknown>
   const onboarding = (input.onboarding ?? {}) as Record<string, unknown>
+  const reply = (input.reply ?? {}) as Record<string, unknown>
 
   const banned = Array.isArray(persona.bannedWords)
     ? persona.bannedWords
@@ -326,6 +336,9 @@ export function normalizeConfig(raw: unknown): AppConfig {
     },
     onboarding: {
       welcome: bool(onboarding.welcome, DEFAULT_CONFIG.onboarding.welcome),
+    },
+    reply: {
+      modelReplies: bool(reply.modelReplies, DEFAULT_CONFIG.reply.modelReplies),
     },
     rhythm: {
       enabled: bool(rhythm.enabled, DEFAULT_CONFIG.rhythm.enabled),
