@@ -3,83 +3,164 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>秘书鱼 · 微信里的私人秘书</title>
-<meta name="description" content="给 DeepSeek Harness 加一个微信入口：会记事、会催你、会主动问候的私人秘书。" />
+<title>秘书鱼 · 你微信中的私人秘书</title>
+<meta name="description" content="你微信中的私人秘书——会记事、会催你、会在该说话的时候先开口。" />
 <style>
-  :root { --fg:#17181a; --muted:#6b7076; --line:#e7e8ea; --bg:#fff; --soft:#f7f8f9; --accent:#1f6feb; }
+  :root {
+    --ink: #0f2f57;
+    --body: #17181a;
+    --muted: #8a8f96;
+    --line: #e8eaed;
+    --soft: #f7f8f9;
+    --blue: #1f6feb;
+    --bg: #fff;
+  }
   * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.7 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
-  .wrap { max-width: 860px; margin: 0 auto; padding: 56px 24px 80px; }
-  h1 { font-size: 40px; line-height:1.2; margin: 0 0 12px; letter-spacing:-0.5px; }
-  .tag { color: var(--muted); font-size:18px; margin: 0 0 28px; }
-  .cta { display:flex; gap:12px; flex-wrap:wrap; margin-bottom: 40px; }
-  .btn { display:inline-block; padding: 12px 20px; border-radius: 10px; text-decoration:none; font-weight:600; border:1px solid var(--line); color:var(--fg); background:var(--bg); }
-  .btn.primary { background: var(--accent); border-color: var(--accent); color:#fff; }
-  .shot { width:100%; border:1px solid var(--line); border-radius: 14px; background: var(--soft); min-height: 280px; display:flex; align-items:center; justify-content:center; color:var(--muted); margin-bottom: 44px; overflow:hidden; }
-  .shot img { width:100%; display:block; }
-  h2 { font-size: 22px; margin: 44px 0 16px; }
-  .grid { display:grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap:14px; }
-  .card { border:1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
-  .card b { display:block; margin-bottom:6px; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--body);
+    font: 16px/1.75 -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; }
+
+  /* ---------- 首屏 ---------- */
+  .hero-wrap { position: relative; }
+  .hero {
+    min-height: 100vh;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    text-align: center;
+    padding: 40px 24px;
+  }
+  .hero h1 {
+    font-size: clamp(64px, 11vw, 132px);
+    line-height: 1.05; letter-spacing: -2px;
+    color: var(--ink); margin: 0 0 22px; font-weight: 700;
+  }
+  .hero .sub {
+    font-size: clamp(15px, 1.6vw, 19px);
+    color: var(--muted); max-width: 620px; margin: 0 0 44px;
+  }
+  .cta { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
+  .btn {
+    display: inline-block; padding: 14px 26px; border-radius: 12px;
+    text-decoration: none; font-weight: 600; font-size: 16px;
+    border: 1px solid var(--line); color: var(--body); background: #fff;
+    transition: transform .12s ease, box-shadow .12s ease;
+  }
+  .btn:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(15, 47, 87, .08); }
+  .btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+  .scroll-hint {
+    position: absolute; bottom: 32px; left: 50%; transform: translateX(-50%);
+    color: #c2c7ce; font-size: 13px; letter-spacing: 1px;
+  }
+
+  /* ---------- 通用区块 ---------- */
+  .wrap { max-width: 880px; margin: 0 auto; padding: 0 24px 96px; }
+  h2 { font-size: 22px; margin: 0 0 18px; color: var(--ink); }
+  section { padding: 56px 0; border-top: 1px solid var(--line); }
+  section:first-of-type { border-top: 0; }
+
+  .shot { width: 100%; border: 1px solid var(--line); border-radius: 16px; overflow: hidden; background: var(--soft); }
+  .shot img { width: 100%; display: block; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+  .card { border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; }
+  .card b { display: block; margin-bottom: 6px; color: var(--ink); }
   .card span { color: var(--muted); font-size: 14px; }
-  ol, ul { padding-left: 22px; }
-  code { background: var(--soft); padding: 2px 6px; border-radius: 5px; font-size: 14px; }
-  pre { background: var(--soft); border:1px solid var(--line); border-radius: 10px; padding: 14px 16px; overflow:auto; }
-  .limits { color: var(--muted); font-size: 14px; }
-  footer { margin-top: 56px; padding-top: 20px; border-top:1px solid var(--line); color: var(--muted); font-size: 14px; }
-  .warn { border-left: 3px solid #e0a100; background: #fffbeb; padding: 12px 16px; border-radius: 8px; font-size: 14px; }
+
+  ul.limits { color: var(--muted); font-size: 14px; padding-left: 20px; margin: 0; }
+  ul.limits li { margin: 4px 0; }
+
+  .warn {
+    border-left: 3px solid #e0a100; background: #fffbeb;
+    padding: 14px 18px; border-radius: 10px; font-size: 14px; color: #6b5a1e;
+  }
+
+  /* ---------- 打赏 ---------- */
+  .reward { text-align: center; }
+  .reward p { color: var(--muted); margin: 0 0 26px; }
+  .reward .qr { display: inline-block; padding: 14px; border: 1px solid var(--line); border-radius: 16px; background: #fff; }
+  .reward .qr img { width: 240px; height: auto; display: block; }
+  .reward .hint { margin-top: 14px; font-size: 13px; color: #b6bbc2; }
+
+  footer { border-top: 1px solid var(--line); padding: 26px 24px 60px; text-align: center; color: #b6bbc2; font-size: 13px; }
+  footer a { color: #8a8f96; text-decoration: none; }
 </style>
 </head>
 <body>
+
+<div class="hero-wrap">
+  <div class="hero">
+    <h1>秘书鱼</h1>
+    <p class="sub">你微信中的私人秘书——会记事、会催你、会在该说话的时候先开口。</p>
+    <div class="cta">
+      <a class="btn primary" data-repo="releases" href="#">下载最新版</a>
+      <a class="btn" data-repo="source" href="#">查看源码</a>
+    </div>
+  </div>
+  <div class="scroll-hint">向下滚动 ↓</div>
+</div>
+
 <div class="wrap">
 
-  <h1>秘书鱼</h1>
-  <p class="tag">微信里的私人秘书。会记事、会催你、会在该说话的时候先开口。</p>
+  <section>
+    <h2>她长这样</h2>
+    <div class="shot">
+      <img src="images/chat.png" alt="微信对话：早间问候、记忆整理、作业提醒与习惯确认"
+           onerror="this.style.display='none';this.parentNode.textContent='截图待补';" />
+    </div>
+  </section>
 
-  <div class="cta">
-    <a class="btn primary" data-repo="releases" href="#">下载最新版</a>
-    <a class="btn" data-repo="source" href="#">查看源码</a>
-  </div>
+  <section>
+    <h2>和普通聊天机器人的区别</h2>
+    <div class="grid">
+      <div class="card"><b>会主动找你</b><span>早上 7:30、睡前 23:00、滑冰前 30 分钟——时间从你的行为里学出来，不是写死的。</span></div>
+      <div class="card"><b>记得住</b><span>最近对话 + 长期事实卡 + 按需翻旧账，不用每次重新自我介绍。</span></div>
+      <div class="card"><b>认日程</b><span>「记一下：周五交报告」就能记；说一句做完了就标完成。</span></div>
+      <div class="card"><b>有性格</b><span>人设、语气、称呼、禁用词都能改，也能换模型。</span></div>
+    </div>
+  </section>
 
-  <div class="shot">
-    <img src="images/chat.png" alt="微信对话：早间问候与日程" onerror="this.style.display='none';this.parentNode.textContent='放一张微信对话截图到这里（docs/images/chat.png）';" />
-  </div>
+  <section>
+    <h2>三步装上</h2>
+    <ol style="padding-left: 22px; margin: 0;">
+      <li>装好 <b>DeepSeek Harness</b>（本插件依赖它提供模型与界面）</li>
+      <li>把本插件加进 profile 的 <code>dependencies</code> 与 <code>bundles</code>，重启 DSH</li>
+      <li>运行 <code>pnpm login</code>，用微信扫码</li>
+    </ol>
+  </section>
 
-  <h2>它和普通聊天机器人有什么不同</h2>
-  <div class="grid">
-    <div class="card"><b>会主动找你</b><span>早上 7:30、睡前 23:00、滑冰前 30 分钟——时间是从你的行为里学出来的，不是写死的。</span></div>
-    <div class="card"><b>记得住</b><span>最近对话 + 长期事实卡 + 按需翻旧账，不用每次重新自我介绍。</span></div>
-    <div class="card"><b>认日程</b><span>「记一下：周五交报告」就能记；说一句做完了就标完成。</span></div>
-    <div class="card"><b>有性格</b><span>人设、语气、称呼、禁用词都能改，也能换模型。</span></div>
-  </div>
+  <section>
+    <h2>现在还不能做什么</h2>
+    <ul class="limits">
+      <li>只支持私聊，群聊收不到</li>
+      <li>只支持文字，图片和文件收发还没做</li>
+      <li>需要你的电脑一直开着</li>
+      <li>超过 24 小时没互动，她发不出主动消息</li>
+      <li>连续发约 10 条后，需要你先回一条才能继续</li>
+    </ul>
+    <p class="warn" style="margin-top: 26px;">
+      本插件使用的是<b>非官方接口</b>，没有稳定性承诺，账号可能被限制。项目不提供账号、不代登录、不收集任何数据——所有消息与凭据都只存在你自己的电脑上。
+    </p>
+  </section>
 
-  <h2>三步装上</h2>
-  <ol>
-    <li>装好 <b>DeepSeek Harness</b>（本插件依赖它提供模型与界面）</li>
-    <li>把本插件加进 profile 的 <code>dependencies</code> 与 <code>bundles</code>，重启 DSH</li>
-    <li>运行 <code>pnpm login</code>，用微信扫码</li>
-  </ol>
-  <pre>git clone https://github.com/<span data-repo-text>YOUR_NAME/mishu-fish</span>.git
-cd mishu-fish &amp;&amp; pnpm install &amp;&amp; pnpm build
-# 然后按 README 里的「装成 DSH 插件」操作</pre>
+  <section class="reward">
+    <h2>打赏</h2>
+    <p>欢迎客官答赏，您的钱将变成秘书鱼的白饭</p>
+    <div class="qr">
+      <img src="images/reward.png" alt="打赏二维码" />
+    </div>
+    <div class="hint">扫码即可</div>
+  </section>
 
-  <h2>现在还不能做什么</h2>
-  <ul class="limits">
-    <li>只支持私聊，群聊收不到</li>
-    <li>只支持文字，图片和文件收发还没做</li>
-    <li>需要你的电脑一直开着</li>
-    <li>超过 24 小时没互动，她发不出主动消息</li>
-    <li>连续发约 10 条后，需要你先回一条才能继续</li>
-  </ul>
-
-  <p class="warn">
-    本插件使用的是<b>非官方接口</b>，没有稳定性承诺，账号可能被限制。项目不提供账号、不代登录、不收集任何数据——所有消息与凭据都只存在你自己的电脑上。
-  </p>
-
-  <footer>
-    MIT License · <a data-repo="source" href="#">GitHub</a> · 由 DeepSeek Harness 驱动
-  </footer>
 </div>
+
+<footer>
+  MIT License · <a data-repo="source" href="#">GitHub</a> · 由 DeepSeek Harness 驱动
+</footer>
+
 <script>
   // 部署到 GitHub Pages 时自动推断仓库地址；本地打开时保留占位
   (function () {
@@ -92,7 +173,6 @@ cd mishu-fish &amp;&amp; pnpm install &amp;&amp; pnpm build
     document.querySelectorAll("[data-repo]").forEach(function (el) {
       el.setAttribute("href", el.getAttribute("data-repo") === "releases" ? base + "/releases/latest" : base);
     });
-    document.querySelectorAll("[data-repo-text]").forEach(function (el) { el.textContent = owner + "/" + repo; });
   })();
 </script>
 </body>
