@@ -118,6 +118,8 @@ export interface OnboardingConfig {
 export interface HabitsConfig {
   /** 从聊天里学习惯（每条消息多一次判断） */
   learnFromChat: boolean
+  /** 从反复出现的“我要去做某事”里学习惯 */
+  learnFromActivities: boolean
 }
 
 export interface AppConfig {
@@ -173,6 +175,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   },
   habits: {
     learnFromChat: true,
+    learnFromActivities: true,
   },
   onboarding: {
     welcome: true,
@@ -319,6 +322,7 @@ export function normalizeConfig(raw: unknown): AppConfig {
     },
     habits: {
       learnFromChat: bool(habits.learnFromChat, DEFAULT_CONFIG.habits.learnFromChat),
+      learnFromActivities: bool(habits.learnFromActivities, DEFAULT_CONFIG.habits.learnFromActivities),
     },
     onboarding: {
       welcome: bool(onboarding.welcome, DEFAULT_CONFIG.onboarding.welcome),

@@ -474,3 +474,28 @@ test('自动判断模式：说“明天早上”也会落到明天 08:00', async
   assert.equal(due.getHours(), 8, '明天早上 → 08:00')
   runtime.dispose()
 })
+
+test('“我准备去打游戏”：静默记一次活动，不打断聊天', async () => {
+  const llm: LlmService = {
+    stream(options: Record<string, unknown>) {
+      const system = String(options.system ?? '')
+      const payload = system.includes('准备去做')
+        ? { activity: true, label: '打游戏' }
+        : { kind: 'chat' }
+      return (async function* () {
+        yield { type: 'text-delta', index: 0, text: JSON.stringify(payload) }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+    listProviders() {
+      return [{ id: 'deepseek-account', name: 'DeepSeek Account' }]
+    },
+  }
+  const runtime = makeRuntime(llm)
+
+  const reply = await runtime.quickReply('我准备去打游戏了', runtime.getConfig())
+  assert.equal(reply, null, '第一次只记录，不回复')
+  assert.equal(runtime.activities().entries, 1)
+  assert.equal(runtime.habits().length, 0, '一次还不够升级成习惯')
+  runtime.dispose()
+})

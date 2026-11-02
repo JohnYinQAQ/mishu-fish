@@ -44,6 +44,7 @@ export const DEFAULT_CONFIG = {
     },
     habits: {
         learnFromChat: true,
+        learnFromActivities: true,
     },
     onboarding: {
         welcome: true,
@@ -186,6 +187,7 @@ export function normalizeConfig(raw) {
         },
         habits: {
             learnFromChat: bool(habits.learnFromChat, DEFAULT_CONFIG.habits.learnFromChat),
+            learnFromActivities: bool(habits.learnFromActivities, DEFAULT_CONFIG.habits.learnFromActivities),
         },
         onboarding: {
             welcome: bool(onboarding.welcome, DEFAULT_CONFIG.onboarding.welcome),

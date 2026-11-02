@@ -7,10 +7,11 @@ import { buildReportText, runDigest, runWeekly, weekKey } from "./digest.js";
 import { sendText } from "../ilink/bot.js";
 import { buildEscalationPrompt } from "./persona.js";
 import { completionCandidates, detectCompletion, detectQuery, formatAdded, formatList, inferDueFromText, isQuestion, itemsInRange, looksLikeItHasTime, matchTrigger } from "./schedule-intent.js";
-import { classifyCompletion, detectMessageIntent, parseScheduleText } from "./schedule-parse.js";
+import { classifyCompletion, detectActivity, detectMessageIntent, parseScheduleText } from "./schedule-parse.js";
 import { clockMinutes, dayKey, greetingsDue } from "./reminder.js";
 import { canGreet, createRhythmStore, describeProfile, profileForDay } from "./rhythm.js";
 import { DEFAULT_LEAD_MINUTES, createHabitStore, discoverHabits, habitsDue, ruleText } from "./habits.js";
+import { createActivityStore, describeActivity, toHabitInput } from "./activities.js";
 import { generateProactive } from "./proactive.js";
 import { doneToday, repeatText } from "./schedule.js";
 import { itemLines } from "./format.js";
@@ -30,6 +31,7 @@ export function createRuntime(options) {
     const schedule = createScheduleStore();
     const rhythm = createRhythmStore();
     const habits = createHabitStore();
+    const activities = createActivityStore();
     /** 写作业流程：先问用多久，再按估计间隔催，最多三次 */
     let homeworkSession = null;
     /** 最近一次问“这条过期的还要不要”的对象 */
@@ -1113,6 +1115,40 @@ export function createRuntime(options) {
             pushLog({ at: Date.now(), dir: 'sys', rid, text: `完成日程：${target.title}` });
             return `好，「${target.title}」标记完成了。`;
         }
+        // “我准备去打游戏”这类：静默记一次活动，攒够次数再建议成习惯
+        if (cfg.habits.learnFromActivities && /(准备|开始|正在|马上|要去|我去|先去|得去)/.test(text) && text.length <= 40) {
+            try {
+                const mention = await detectActivity(options.llm, bestRoute(), text);
+                if (mention) {
+                    const observation = activities.record(mention.label);
+                    if (observation) {
+                        pushLog({
+                            at: Date.now(),
+                            dir: 'sys',
+                            rid,
+                            text: `活动记录：${observation.label}（周${'日一二三四五六'[observation.weekday]} ${observation.hour} 点）`,
+                        });
+                        const candidates = activities.promotable(habits.list());
+                        const candidate = candidates.find((entry) => entry.label === mention.label);
+                        if (candidate) {
+                            const habit = habits.upsertCandidate(toHabitInput(candidate));
+                            if (habit) {
+                                pushLog({
+                                    at: Date.now(),
+                                    dir: 'sys',
+                                    rid,
+                                    text: `从活动推断出习惯候选：${habit.label}（${describeActivity(candidate)}）`,
+                                });
+                                return `我注意到你${describeActivity(candidate)}。要不要把它设成习惯？我在设置里放了个候选，你确认后我才会在事前提醒你。`;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (err) {
+                pushLog({ at: Date.now(), dir: 'sys', level: 'warn', rid, text: `活动识别失败：${err?.message ?? err}` });
+            }
+        }
         // 一次判断：这是日程、习惯，还是闲聊
         const autoSchedule = !cfg.schedule.triggerWord;
         const learnHabits = cfg.habits.learnFromChat;
@@ -1307,6 +1343,7 @@ export function createRuntime(options) {
             return { ok: true, sent: welcomeSent() };
         },
         habits: () => habits.list(),
+        activities: () => ({ entries: activities.list().length, recent: activities.list().slice(-5) }),
         addHabit: (input) => habits.add(input),
         updateHabit: (id, patch) => habits.update(id, patch),
         removeHabit: (id) => habits.remove(id),

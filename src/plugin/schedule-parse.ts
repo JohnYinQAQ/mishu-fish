@@ -373,3 +373,45 @@ export async function detectMessageIntent(
   const raw = await callModel(llm, route, system, text)
   return parseMessageIntent(raw)
 }
+
+export interface ActivityMention {
+  label: string
+}
+
+export function parseActivityMention(raw: string): ActivityMention | null {
+  const cleaned = raw.replace(/^\s*```(?:json)?/i, '').replace(/```\s*$/i, '').trim()
+  try {
+    const value = JSON.parse(cleaned) as Record<string, unknown>
+    if (value.activity !== true) return null
+    const label = typeof value.label === 'string' ? value.label.trim() : ''
+    return label ? { label: label.slice(0, 20) } : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 判断一句话是不是在说“我准备/正在做某件事”。
+ * 只在句子里出现“准备/开始/正在/要去”这类词时才调用。
+ */
+export async function detectActivity(
+  llm: LlmService,
+  route: Route,
+  text: string,
+): Promise<ActivityMention | null> {
+  const system = [
+    '判断这句话是不是在说“我准备去做 / 正在做某件具体的事”。只输出 JSON，不要解释：',
+    '{"activity": true, "label": "打游戏"} 或 {"activity": false}',
+    '',
+    '是：准备去打游戏、在跑步、开始写作业、要去健身、正在练琴',
+    '不是：',
+    '· 睡觉、起床、洗澡、上厕所、吃饭这类日常状态（作息另有记录）→ false',
+    '· 只是表达情绪或想法：“我准备累了”“我想打游戏” → false',
+    '· 没有具体活动：“我准备一下” → false',
+    '',
+    'label 只写事情本身，2–8 个字，不要带时间和人称。',
+  ].join('\n')
+
+  const raw = await callModel(llm, route, system, text)
+  return parseActivityMention(raw)
+}
