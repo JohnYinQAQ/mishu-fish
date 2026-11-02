@@ -5,9 +5,12 @@ export function matchTrigger(text, word) {
     if (!trigger)
         return null;
     const trimmed = text.trim();
-    if (!trimmed.startsWith(trigger))
+    // 允许前面带称呼：“秘书鱼，记一下…”“鱼鱼 记一下…” 也算
+    const withoutAddress = trimmed.replace(/^(?:(?:秘书鱼|小秘书|鱼鱼|鱼|你)[，,：:、\s]*)+/, '');
+    const target = withoutAddress.startsWith(trigger) ? withoutAddress : trimmed;
+    if (!target.startsWith(trigger))
         return null;
-    return trimmed.slice(trigger.length).replace(/^[\s：:，,、]+/, '').trim();
+    return target.slice(trigger.length).replace(/^[\s：:，,、]+/, '').trim();
 }
 const TIME_WORDS = /(今天|明天|后天|大后天|周[一二三四五六日天]|星期[一二三四五六日天]|下周|这周|本周|\d{1,2}\s*[月号]|\d{1,2}\s*点|\d{1,2}:\d{2}|今晚|明晚|早上|上午|中午|下午|晚上)/;
 /** 话里有没有“时间”的痕迹；用来判断解析失败时该不该追问 */

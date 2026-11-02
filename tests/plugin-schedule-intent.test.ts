@@ -172,3 +172,10 @@ test('parseMessageIntent：日程 / 习惯 / 闲聊三分类', async () => {
   assert.equal(parseMessageIntent('乱码').kind, 'chat')
   assert.equal(parseMessageIntent(JSON.stringify({ kind: 'habit', label: '', rule: {} })).kind, 'chat')
 })
+
+test('matchTrigger：前面带称呼也能认出来', () => {
+  assert.equal(matchTrigger('秘书鱼，记一下，明天带小木条', '记一下'), '明天带小木条')
+  assert.equal(matchTrigger('秘书鱼 记一下 明天带小木条', '记一下'), '明天带小木条')
+  assert.equal(matchTrigger('鱼鱼，记一下：明天带小木条', '记一下'), '明天带小木条')
+  assert.equal(matchTrigger('记得明天带小木条', '记一下'), null, '不同词不该误判')
+})
