@@ -72,9 +72,10 @@ export function buildProactiveMessages(
   config: AppConfig,
   facts: string,
   context: ProactiveContext,
+  now: Date = new Date(),
 ): { system: string; user: string } {
   const system = [
-    buildSystemPrompt(config, facts),
+    buildSystemPrompt(config, facts, undefined, now),
     '',
     '## 这次的任务',
     KIND_RULES[context.kind],
@@ -139,7 +140,7 @@ export async function generateProactive(
     return stripMarkdown(text).trim()
   }
 
-  const { system, user } = buildProactiveMessages(config, facts, context)
+  const { system, user } = buildProactiveMessages(config, facts, context, new Date())
   const first = await attempt(system, user)
   if (first) return first.slice(0, 500)
 

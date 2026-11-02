@@ -109,7 +109,7 @@ export async function generateReply(llm, config, userText, routes, options = {})
     }
     const attempts = [
         {
-            system: buildSystemPrompt(config, facts, recall),
+            system: buildSystemPrompt(config, facts, recall, options.now),
             messages: [...history, ...buildUserMessages(userText)],
             extra: { temperature: config.model.temperature, maxTokens: config.model.maxTokens },
         },

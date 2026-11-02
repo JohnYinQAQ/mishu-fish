@@ -132,7 +132,7 @@ export async function generateReply(
   config: AppConfig,
   userText: string,
   routes: Route | Route[],
-  options: { history?: ChatMessage[]; facts?: string; recall?: string; signal?: AbortSignal } = {},
+  options: { history?: ChatMessage[]; facts?: string; recall?: string; signal?: AbortSignal; now?: Date } = {},
 ): Promise<ReplyResult> {
   const { history = [], facts, recall, signal } = options
   // 允许传单条路由（老调用）或多条候选：按顺序试，第一条成功的就用它，
@@ -146,7 +146,7 @@ export async function generateReply(
 
   const attempts: Array<{ messages: unknown; system?: string; extra: Record<string, unknown> }> = [
     {
-      system: buildSystemPrompt(config, facts, recall),
+      system: buildSystemPrompt(config, facts, recall, options.now),
       messages: [...history, ...buildUserMessages(userText)],
       extra: { temperature: config.model.temperature, maxTokens: config.model.maxTokens },
     },

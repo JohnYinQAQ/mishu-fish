@@ -100,3 +100,19 @@ test('normalizeConfig: schedule 默认值与夹紧', () => {
   assert.equal(custom.schedule.triggerWord, '')
   assert.equal(normalizeConfig({}).schedule.triggerWord, '记一下')
 })
+
+test('buildSystemPrompt：带上当前本地时间，避免模型把晚上当成早上', async () => {
+  const { buildSystemPrompt, formatNow } = await import('../src/plugin/persona.ts')
+  const config = normalizeConfig({})
+  const night = new Date(2026, 10, 1, 20, 55)
+  const morning = new Date(2026, 10, 2, 7, 30)
+
+  assert.equal(formatNow(night), '2026-11-01 周日 20:55')
+
+  const prompt = buildSystemPrompt(config, '', undefined, night)
+  assert.match(prompt, /现在/)
+  assert.match(prompt, /2026-11-01 周日 20:55/)
+  assert.match(prompt, /本地时间/)
+
+  assert.match(buildSystemPrompt(config, '', undefined, morning), /07:30/)
+})

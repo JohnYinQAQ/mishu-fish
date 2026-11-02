@@ -39,9 +39,9 @@ const KIND_RULES = {
         '不要重复上一条催促的原话。',
     ].join('\n'),
 };
-export function buildProactiveMessages(config, facts, context) {
+export function buildProactiveMessages(config, facts, context, now = new Date()) {
     const system = [
-        buildSystemPrompt(config, facts),
+        buildSystemPrompt(config, facts, undefined, now),
         '',
         '## 这次的任务',
         KIND_RULES[context.kind],
@@ -102,7 +102,7 @@ export async function generateProactive(llm, route, config, facts, context) {
             throw new Error(failure);
         return stripMarkdown(text).trim();
     };
-    const { system, user } = buildProactiveMessages(config, facts, context);
+    const { system, user } = buildProactiveMessages(config, facts, context, new Date());
     const first = await attempt(system, user);
     if (first)
         return first.slice(0, 500);
