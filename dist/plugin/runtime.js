@@ -873,6 +873,22 @@ export function createRuntime(options) {
             pushLog({ at: Date.now(), dir: 'sys', text: `习惯追问：${habit.label}` });
         }
     }
+    /**
+     * 统一决定一条新日程的截止时间：
+     * 模型给了就用；没给但话里有“明天/周几/今晚”就按那天兜底；再不行才无期限。
+     */
+    function resolveDue(parsed, text) {
+        if (parsed.repeat)
+            return { due: null };
+        if (parsed.due)
+            return { due: parsed.due };
+        const inferred = inferDueFromText(text);
+        if (inferred)
+            return { due: inferred.date.toISOString(), note: `没听出几点，按${inferred.label}记` };
+        if (looksLikeItHasTime(text))
+            return { due: null, note: '没听出具体时间，先按无期限记' };
+        return { due: null };
+    }
     function manualPriors() {
         return {
             wake: config.rhythm.wakeTime,
@@ -1032,19 +1048,7 @@ export function createRuntime(options) {
             if (!parsed) {
                 return '这次没解析成功，能用「记一下：内容 时间」再说一遍吗？';
             }
-            // 模型没给出时间、但话里明明有“明天/周几” → 本地兜底到那天结束前
-            let due = parsed.due;
-            let note;
-            if (!due && !parsed.repeat) {
-                const inferred = inferDueFromText(payload);
-                if (inferred) {
-                    due = inferred.date.toISOString();
-                    note = `没听出几点，按${inferred.label}结束前记`;
-                }
-                else if (looksLikeItHasTime(payload)) {
-                    note = '没听出具体时间，先按无期限记';
-                }
-            }
+            const { due, note } = resolveDue(parsed, payload);
             const item = schedule.add({
                 title: parsed.title,
                 due,
@@ -1130,16 +1134,16 @@ export function createRuntime(options) {
                     }
                 }
                 if (intent.kind === 'schedule' && autoSchedule) {
+                    const { due, note } = resolveDue({ due: intent.due, repeat: intent.repeat }, text);
                     const item = schedule.add({
                         title: intent.title,
-                        due: intent.due,
+                        due,
                         repeat: intent.repeat,
                         source: 'chat',
                         sourceText: text,
                     });
                     syncHabits();
                     pushLog({ at: Date.now(), dir: 'sys', rid, text: `自动识别日程：${item.title}` });
-                    const note = !intent.repeat && !item.due && looksLikeItHasTime(text) ? '没听出具体时间，先按无期限记' : undefined;
                     return formatAdded(item, note);
                 }
             }

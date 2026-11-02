@@ -125,7 +125,7 @@ function clockOf(item) {
 /** 一句话确认新增 */
 export function formatAdded(item, note) {
     if (!item.due)
-        return `记下了：${item.title}（没有时间${note ? `，${note}` : ''}）`;
+        return `记下了：${item.title}（${note ?? '无期限'}）`;
     const date = new Date(item.due);
     const day = `${date.getMonth() + 1} 月 ${date.getDate()} 日`;
     return `记下了：${item.title} · ${day} ${clockOf(item)}${note ? `（${note}）` : ''}`;

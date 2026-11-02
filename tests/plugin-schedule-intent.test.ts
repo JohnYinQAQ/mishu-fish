@@ -72,7 +72,7 @@ test('matchPending：模糊匹配、排除已完成', () => {
 test('formatAdded / formatList：没有内容就明说没有', () => {
   const withDue = item({ due: LOCAL_DUE })
   assert.match(formatAdded(withDue), /记下了：交报告 · 11 月 1 日 23:59/)
-  assert.match(formatAdded(item({})), /没有时间/)
+  assert.match(formatAdded(item({})), /无期限/)
 
   assert.equal(formatList([], 'today'), '今天没有安排。')
   const list = formatList([item({ due: null }), item({ id: 'b', due: LOCAL_DUE })], 'today')

@@ -63,7 +63,7 @@ test('没提时间 → 按无期限记，并说明', async () => {
   const runtime = makeRuntime(llmReturning({ title: '问老师那道题', due: null }))
   const reply = await runtime.quickReply('记一下：问老师那道题', runtime.getConfig())
 
-  assert.match(reply!, /没有时间/)
+  assert.match(reply!, /无期限/)
   assert.equal(runtime.scheduleList()[0].due, null)
   runtime.dispose()
 })
@@ -72,7 +72,7 @@ test('模型没给时间、但话里有“周五” → 兜底到那天结束前
   const runtime = makeRuntime(llmReturning({ title: '交报告', due: null }))
   const reply = await runtime.quickReply('记一下：周五交报告', runtime.getConfig())
 
-  assert.match(reply!, /结束前/)
+  assert.match(reply!, /按这周五|按周五/)
   const item = runtime.scheduleList()[0]
   assert.ok(item.due, '应该有一个兜底日期，而不是无期限')
   assert.equal(new Date(item.due!).getDay(), 5, '周五')
@@ -443,5 +443,34 @@ test('重置首次介绍后，会再发一次', async () => {
 
   const again = await runtime.quickReply('咦', runtime.getConfig())
   assert.match(again!, /专属秘书鱼/)
+  runtime.dispose()
+})
+
+test('自动判断模式：说“明天早上”也会落到明天 08:00', async () => {
+  const llm: LlmService = {
+    stream(options: Record<string, unknown>) {
+      const system = String(options.system ?? '')
+      const payload = system.includes('分成三类')
+        ? { kind: 'schedule', title: '带小木条去学校', due: null, repeat: null }
+        : { kind: 'chat' }
+      return (async function* () {
+        yield { type: 'text-delta', index: 0, text: JSON.stringify(payload) }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+    listProviders() {
+      return [{ id: 'deepseek-account', name: 'DeepSeek Account' }]
+    },
+  }
+  const runtime = makeRuntime(llm)
+  runtime.updateConfig({ schedule: { triggerWord: '' } })
+
+  const reply = await runtime.quickReply('秘书鱼，我明天早上要带小木条去学校', runtime.getConfig())
+  assert.match(reply!, /记下了/)
+
+  const item = runtime.scheduleList()[0]
+  assert.ok(item.due, '应该兜底出一个截止时间')
+  const due = new Date(item.due!)
+  assert.equal(due.getHours(), 8, '明天早上 → 08:00')
   runtime.dispose()
 })
