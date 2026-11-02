@@ -68,12 +68,15 @@ test('没提时间 → 按无期限记，并说明', async () => {
   runtime.dispose()
 })
 
-test('说了时间但没解析出来 → 明确提醒，不瞎猜', async () => {
+test('模型没给时间、但话里有“周五” → 兜底到那天结束前', async () => {
   const runtime = makeRuntime(llmReturning({ title: '交报告', due: null }))
   const reply = await runtime.quickReply('记一下：周五交报告', runtime.getConfig())
 
-  assert.match(reply!, /没听出具体时间/)
-  assert.equal(runtime.scheduleList()[0].due, null)
+  assert.match(reply!, /结束前/)
+  const item = runtime.scheduleList()[0]
+  assert.ok(item.due, '应该有一个兜底日期，而不是无期限')
+  assert.equal(new Date(item.due!).getDay(), 5, '周五')
+  assert.equal(new Date(item.due!).getHours(), 23)
   runtime.dispose()
 })
 

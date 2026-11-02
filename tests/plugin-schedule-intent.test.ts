@@ -179,3 +179,23 @@ test('matchTrigger：前面带称呼也能认出来', () => {
   assert.equal(matchTrigger('鱼鱼，记一下：明天带小木条', '记一下'), '明天带小木条')
   assert.equal(matchTrigger('记得明天带小木条', '记一下'), null, '不同词不该误判')
 })
+
+test('inferDueFromText：明天 / 后天 / 周三 都能推出日期', async () => {
+  const { inferDueFromText } = await import('../src/plugin/schedule-intent.ts')
+  const now = new Date(2026, 10, 2, 21, 0) // 2026-11-02 周一 21:00
+
+  const tomorrow = inferDueFromText('我明天要带小木条去学校', now)
+  assert.ok(tomorrow)
+  assert.equal(tomorrow!.label, '明天')
+  assert.equal(tomorrow!.date.getDate(), 3)
+  assert.equal(tomorrow!.date.getHours(), 23)
+  assert.equal(tomorrow!.date.getMinutes(), 59)
+
+  const after = inferDueFromText('后天交报告', now)
+  assert.equal(after!.date.getDate(), 4)
+
+  const wednesday = inferDueFromText('周三交', now)
+  assert.equal(wednesday!.date.getDay(), 3, '应该是周三')
+
+  assert.equal(inferDueFromText('随便记一下', now), null, '没有时间线索就不猜')
+})

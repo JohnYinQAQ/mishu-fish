@@ -11,7 +11,7 @@ import { sendText } from '../ilink/bot.ts'
 import type { MemoryStore } from './memory.ts'
 import type { ChatMessage } from './persona.ts'
 import { buildEscalationPrompt } from './persona.ts'
-import { completionCandidates, detectCompletion, detectQuery, formatAdded, formatList, isQuestion, itemsInRange, looksLikeItHasTime, matchTrigger } from './schedule-intent.ts'
+import { completionCandidates, detectCompletion, detectQuery, formatAdded, formatList, inferDueFromText, isQuestion, itemsInRange, looksLikeItHasTime, matchTrigger } from './schedule-intent.ts'
 import { classifyCompletion, detectMessageIntent, parseScheduleText } from './schedule-parse.ts'
 import { clockMinutes, dayKey, greetingsDue } from './reminder.ts'
 import { canGreet, createRhythmStore, describeProfile, profileForDay } from './rhythm.ts'
@@ -1111,9 +1111,22 @@ export function createRuntime(options: {
         return '这次没解析成功，能用「记一下：内容 时间」再说一遍吗？'
       }
 
+      // 模型没给出时间、但话里明明有“明天/周几” → 本地兜底到那天结束前
+      let due = parsed.due
+      let note: string | undefined
+      if (!due && !parsed.repeat) {
+        const inferred = inferDueFromText(payload)
+        if (inferred) {
+          due = inferred.date.toISOString()
+          note = `没听出几点，按${inferred.label}结束前记`
+        } else if (looksLikeItHasTime(payload)) {
+          note = '没听出具体时间，先按无期限记'
+        }
+      }
+
       const item = schedule.add({
         title: parsed.title,
-        due: parsed.due,
+        due,
         repeat: parsed.repeat ?? null,
         source: 'chat',
         sourceText: payload,
@@ -1127,8 +1140,6 @@ export function createRuntime(options: {
         }）`,
       })
       syncHabits()
-      const note =
-        !parsed.repeat && !parsed.due && looksLikeItHasTime(payload) ? '没听出具体时间，先按无期限记' : undefined
       return formatAdded(item, note)
     }
 

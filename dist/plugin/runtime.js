@@ -6,7 +6,7 @@ import { createScheduleStore } from "./schedule.js";
 import { buildReportText, runDigest, runWeekly, weekKey } from "./digest.js";
 import { sendText } from "../ilink/bot.js";
 import { buildEscalationPrompt } from "./persona.js";
-import { completionCandidates, detectCompletion, detectQuery, formatAdded, formatList, isQuestion, itemsInRange, looksLikeItHasTime, matchTrigger } from "./schedule-intent.js";
+import { completionCandidates, detectCompletion, detectQuery, formatAdded, formatList, inferDueFromText, isQuestion, itemsInRange, looksLikeItHasTime, matchTrigger } from "./schedule-intent.js";
 import { classifyCompletion, detectMessageIntent, parseScheduleText } from "./schedule-parse.js";
 import { clockMinutes, dayKey, greetingsDue } from "./reminder.js";
 import { canGreet, createRhythmStore, describeProfile, profileForDay } from "./rhythm.js";
@@ -1032,9 +1032,22 @@ export function createRuntime(options) {
             if (!parsed) {
                 return '这次没解析成功，能用「记一下：内容 时间」再说一遍吗？';
             }
+            // 模型没给出时间、但话里明明有“明天/周几” → 本地兜底到那天结束前
+            let due = parsed.due;
+            let note;
+            if (!due && !parsed.repeat) {
+                const inferred = inferDueFromText(payload);
+                if (inferred) {
+                    due = inferred.date.toISOString();
+                    note = `没听出几点，按${inferred.label}结束前记`;
+                }
+                else if (looksLikeItHasTime(payload)) {
+                    note = '没听出具体时间，先按无期限记';
+                }
+            }
             const item = schedule.add({
                 title: parsed.title,
-                due: parsed.due,
+                due,
                 repeat: parsed.repeat ?? null,
                 source: 'chat',
                 sourceText: payload,
@@ -1046,7 +1059,6 @@ export function createRuntime(options) {
                 text: `新增日程：${item.title}（${item.repeat ? repeatText(item) : item.due ? new Date(item.due).toLocaleString('zh-CN') : '无期限'}）`,
             });
             syncHabits();
-            const note = !parsed.repeat && !parsed.due && looksLikeItHasTime(payload) ? '没听出具体时间，先按无期限记' : undefined;
             return formatAdded(item, note);
         }
         const range = detectQuery(text);

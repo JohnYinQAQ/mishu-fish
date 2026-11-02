@@ -180,3 +180,41 @@ export function itemsInRange(items: ScheduleItem[], range: QueryRange): Schedule
     return time >= start && time < end
   })
 }
+
+/**
+ * 从“明天 / 后天 / 周三”这类词里推出日期，用作模型没给时间时的兜底。
+ * 只到“天”这一级，时刻一律取当天 23:59。
+ */
+export function inferDueFromText(text: string, now: Date = new Date()): { date: Date; label: string } | null {
+  const base = new Date(now)
+  base.setHours(23, 59, 0, 0)
+
+  const dayOffset: Array<[RegExp, number, string]> = [
+    [/大后天/, 3, '大后天'],
+    [/后天/, 2, '后天'],
+    [/明天|明日/, 1, '明天'],
+    [/今天|今日/, 0, '今天'],
+  ]
+  for (const [pattern, offset, label] of dayOffset) {
+    if (!pattern.test(text)) continue
+    const date = new Date(base)
+    date.setDate(date.getDate() + offset)
+    return { date, label }
+  }
+
+  const weekday = /(?:下)?(?:周|星期|礼拜)([一二三四五六日天])/.exec(text)
+  if (weekday) {
+    const names = '日一二三四五六'
+    const target = names.indexOf(weekday[1])
+    if (target >= 0) {
+      const date = new Date(base)
+      let delta = (target - date.getDay() + 7) % 7
+      if (delta === 0) delta = 7
+      if (/^下/.test(weekday[0])) delta += 7
+      date.setDate(date.getDate() + delta)
+      return { date, label: `${/^下/.test(weekday[0]) ? '下周' : '这周'}${weekday[1]}` }
+    }
+  }
+
+  return null
+}
