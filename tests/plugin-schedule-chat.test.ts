@@ -410,7 +410,9 @@ test('首次对话：先自我介绍并问三件事，第二次不再重复', as
   runtime.updateConfig({ habits: { learnFromChat: false } })
 
   const first = await runtime.quickReply('你好', runtime.getConfig())
-  assert.match(first!, /秘书鱼|三件事/)
+  assert.match(first!, /专属秘书鱼/)
+  assert.match(first!, /记一下：周五交报告/)
+  assert.doesNotMatch(first!, /怎么称呼你/, '不该再问问题')
   assert.equal(runtime.onboarding().sent, true)
 
   const before = calls
@@ -437,6 +439,6 @@ test('重置首次介绍后，会再发一次', async () => {
   runtime.resetOnboarding()
 
   const again = await runtime.quickReply('咦', runtime.getConfig())
-  assert.match(again!, /又见面了/)
+  assert.match(again!, /专属秘书鱼/)
   runtime.dispose()
 })

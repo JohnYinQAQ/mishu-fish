@@ -1013,22 +1013,16 @@ export function createRuntime(options: {
    * 顺序：新增 → 查询 → 完成。都不命中返回 null，走正常聊天。
    */
   async function quickReply(text: string, cfg: AppConfig, rid = '-'): Promise<string | null> {
-    // 第一次说话：先自我介绍 + 问三件事，而不是直接回答
+    // 第一次说话：先打招呼介绍自己，这段话是固定的，不走模型
     if (cfg.onboarding.welcome && !welcomeSent()) {
       markWelcomeSent()
-      pushLog({ at: Date.now(), dir: 'sys', rid, text: '首次对话：发送自我介绍' })
-      return composeProactive(
-        'welcome',
-        {},
-        `我是${config.persona.name}，从现在起住在你的微信里。
-
-我能记：你说过的事、你在忙什么，以后不用重复讲。
-我能记日程和提醒：说一句「记一下：周五交报告」就行。
-我能学作息：从你的作息里判断你几点睡、几点起，在该说话的时候开口。
-
-先问你三件事：
-怎么称呼你？平时几点睡、几点起？最近想让我帮你记着什么？`,
-      )
+      pushLog({ at: Date.now(), dir: 'sys', rid, text: '首次对话：发送打招呼消息' })
+      return [
+        `你好！我是你的专属${cfg.persona.name}！从现在起住在你的微信里。`,
+        '作为一个秘书，我可以记住你说过的事，你在忙什么。',
+        '我也能记日程并提前提醒你完成，只要说一句「记一下：周五交报告」就行。',
+        '我能学作息，你只要每天跟我睡前道晚安，起来道早安，我就可以从你的作息里判断你几点睡，几点起，在该说话的时候开口！',
+      ].join('\n')
     }
 
     // 聊天里说“我要开始写作业了”：立刻进入流程，并记下开始时间
