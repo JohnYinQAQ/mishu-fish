@@ -179,7 +179,20 @@ export function itemsInRange(items, range) {
 export function inferDueFromText(text, now = new Date()) {
     const base = new Date(now);
     base.setHours(23, 59, 0, 0);
+    // 没说具体几点，但说了“早上/下午”这类时段，就按该时段的默认时刻
+    const segments = [
+        [/清晨|早上|早晨|上午/, 8, '早上'],
+        [/中午|正午/, 12, '中午'],
+        [/下午|午后/, 15, '下午'],
+        [/傍晚|晚上|夜里|今晚|明晚/, 20, '晚上'],
+    ];
+    const segment = segments.find(([pattern]) => pattern.test(text));
+    if (segment) {
+        base.setHours(segment[1], 0, 0, 0);
+    }
     const dayOffset = [
+        [/明晚/, 1, '明天'],
+        [/今晚/, 0, '今天'],
         [/大后天/, 3, '大后天'],
         [/后天/, 2, '后天'],
         [/明天|明日/, 1, '明天'],
@@ -190,7 +203,7 @@ export function inferDueFromText(text, now = new Date()) {
             continue;
         const date = new Date(base);
         date.setDate(date.getDate() + offset);
-        return { date, label };
+        return { date, label: segment ? `${label}${segment[2]}` : label };
     }
     const weekday = /(?:下)?(?:周|星期|礼拜)([一二三四五六日天])/.exec(text);
     if (weekday) {

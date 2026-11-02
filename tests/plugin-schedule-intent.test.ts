@@ -191,6 +191,14 @@ test('inferDueFromText：明天 / 后天 / 周三 都能推出日期', async () 
   assert.equal(tomorrow!.date.getHours(), 23)
   assert.equal(tomorrow!.date.getMinutes(), 59)
 
+  const tomorrowMorning = inferDueFromText('我明天早上要带小木条去学校', now)
+  assert.equal(tomorrowMorning!.date.getDate(), 3)
+  assert.equal(tomorrowMorning!.date.getHours(), 8, '明天早上 → 08:00')
+  assert.match(tomorrowMorning!.label, /明天早上/)
+
+  const evening = inferDueFromText('今晚交', now)
+  assert.equal(evening!.date.getHours(), 20)
+
   const after = inferDueFromText('后天交报告', now)
   assert.equal(after!.date.getDate(), 4)
 
