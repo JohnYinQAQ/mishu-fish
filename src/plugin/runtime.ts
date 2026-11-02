@@ -1020,7 +1020,7 @@ export function createRuntime(options: {
       return composeProactive(
         'welcome',
         {},
-        `我是秘书鱼，从现在起住在你的微信里。
+        `我是${config.persona.name}，从现在起住在你的微信里。
 
 我能记：你说过的事、你在忙什么，以后不用重复讲。
 我能记日程和提醒：说一句「记一下：周五交报告」就行。

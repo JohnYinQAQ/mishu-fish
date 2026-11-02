@@ -941,7 +941,7 @@ export function createRuntime(options) {
         if (cfg.onboarding.welcome && !welcomeSent()) {
             markWelcomeSent();
             pushLog({ at: Date.now(), dir: 'sys', rid, text: '首次对话：发送自我介绍' });
-            return composeProactive('welcome', {}, `我是秘书鱼，从现在起住在你的微信里。
+            return composeProactive('welcome', {}, `我是${config.persona.name}，从现在起住在你的微信里。
 
 我能记：你说过的事、你在忙什么，以后不用重复讲。
 我能记日程和提醒：说一句「记一下：周五交报告」就行。
