@@ -110,6 +110,11 @@ export interface RhythmConfig {
   eveningGreeting: string
 }
 
+export interface OnboardingConfig {
+  /** 第一次对话时先做自我介绍和征询 */
+  welcome: boolean
+}
+
 export interface HabitsConfig {
   /** 从聊天里学习惯（每条消息多一次判断） */
   learnFromChat: boolean
@@ -126,6 +131,7 @@ export interface AppConfig {
   schedule: ScheduleConfig
   rhythm: RhythmConfig
   habits: HabitsConfig
+  onboarding: OnboardingConfig
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -167,6 +173,9 @@ export const DEFAULT_CONFIG: AppConfig = {
   },
   habits: {
     learnFromChat: true,
+  },
+  onboarding: {
+    welcome: true,
   },
   rhythm: {
     enabled: true,
@@ -247,6 +256,7 @@ export function normalizeConfig(raw: unknown): AppConfig {
   const schedule = (input.schedule ?? {}) as Record<string, unknown>
   const rhythm = (input.rhythm ?? {}) as Record<string, unknown>
   const habits = (input.habits ?? {}) as Record<string, unknown>
+  const onboarding = (input.onboarding ?? {}) as Record<string, unknown>
 
   const banned = Array.isArray(persona.bannedWords)
     ? persona.bannedWords
@@ -309,6 +319,9 @@ export function normalizeConfig(raw: unknown): AppConfig {
     },
     habits: {
       learnFromChat: bool(habits.learnFromChat, DEFAULT_CONFIG.habits.learnFromChat),
+    },
+    onboarding: {
+      welcome: bool(onboarding.welcome, DEFAULT_CONFIG.onboarding.welcome),
     },
     rhythm: {
       enabled: bool(rhythm.enabled, DEFAULT_CONFIG.rhythm.enabled),

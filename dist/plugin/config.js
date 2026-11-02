@@ -45,6 +45,9 @@ export const DEFAULT_CONFIG = {
     habits: {
         learnFromChat: true,
     },
+    onboarding: {
+        welcome: true,
+    },
     rhythm: {
         enabled: true,
         wakeTime: '',
@@ -123,6 +126,7 @@ export function normalizeConfig(raw) {
     const schedule = (input.schedule ?? {});
     const rhythm = (input.rhythm ?? {});
     const habits = (input.habits ?? {});
+    const onboarding = (input.onboarding ?? {});
     const banned = Array.isArray(persona.bannedWords)
         ? persona.bannedWords
             .filter((word) => typeof word === 'string')
@@ -182,6 +186,9 @@ export function normalizeConfig(raw) {
         },
         habits: {
             learnFromChat: bool(habits.learnFromChat, DEFAULT_CONFIG.habits.learnFromChat),
+        },
+        onboarding: {
+            welcome: bool(onboarding.welcome, DEFAULT_CONFIG.onboarding.welcome),
         },
         rhythm: {
             enabled: bool(rhythm.enabled, DEFAULT_CONFIG.rhythm.enabled),

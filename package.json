@@ -1,6 +1,6 @@
 {
   "name": "mishu-fish",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "秘书鱼 · 微信 iLink Bot 私人秘书（CLI demo + DSH 插件）",
   "type": "module",

@@ -796,6 +796,28 @@ export function createRuntime(options: {
   ensureHomeworkHabit()
   syncHabits()
 
+  function onboardedFile(): string {
+    return path.join(homeDir(), 'memory', '.onboarded.json')
+  }
+
+  function welcomeSent(): boolean {
+    try {
+      const value = JSON.parse(fs.readFileSync(onboardedFile(), 'utf8')) as { sentAt?: number }
+      return Number(value.sentAt) > 0
+    } catch {
+      return false
+    }
+  }
+
+  function markWelcomeSent(): void {
+    try {
+      fs.mkdirSync(path.dirname(onboardedFile()), { recursive: true, mode: 0o700 })
+      fs.writeFileSync(onboardedFile(), JSON.stringify({ sentAt: Date.now() }), { mode: 0o600 })
+    } catch {
+      /* ignore */
+    }
+  }
+
   function proactiveHistoryFile(): string {
     return path.join(homeDir(), 'memory', '.proactive.json')
   }
@@ -991,6 +1013,24 @@ export function createRuntime(options: {
    * 顺序：新增 → 查询 → 完成。都不命中返回 null，走正常聊天。
    */
   async function quickReply(text: string, cfg: AppConfig, rid = '-'): Promise<string | null> {
+    // 第一次说话：先自我介绍 + 问三件事，而不是直接回答
+    if (cfg.onboarding.welcome && !welcomeSent()) {
+      markWelcomeSent()
+      pushLog({ at: Date.now(), dir: 'sys', rid, text: '首次对话：发送自我介绍' })
+      return composeProactive(
+        'welcome',
+        {},
+        `我是秘书鱼，从现在起住在你的微信里。
+
+我能记：你说过的事、你在忙什么，以后不用重复讲。
+我能记日程和提醒：说一句「记一下：周五交报告」就行。
+我能学作息：从你的作息里判断你几点睡、几点起，在该说话的时候开口。
+
+先问你三件事：
+怎么称呼你？平时几点睡、几点起？最近想让我帮你记着什么？`,
+      )
+    }
+
     // 聊天里说“我要开始写作业了”：立刻进入流程，并记下开始时间
     const wantsHomework = /(开始写作业|开始做作业|要写作业|准备写作业|写作业了|做作业了|写作业去)/.test(text)
     if (cfg.rhythm.enabled && wantsHomework && !homeworkSession) {
@@ -1335,6 +1375,17 @@ export function createRuntime(options: {
     }),
     providers: readProviders,
     bestRoute,
+
+    onboarding: () => ({ welcome: config.onboarding.welcome, sent: welcomeSent() }),
+    resetOnboarding: () => {
+      try {
+        fs.rmSync(onboardedFile())
+      } catch {
+        /* ignore */
+      }
+      pushLog({ at: Date.now(), dir: 'sys', text: '已重置首次介绍，下次说话会重新发' })
+      return { ok: true, sent: welcomeSent() }
+    },
 
     habits: () => habits.list(),
     addHabit: (input: Parameters<typeof habits.add>[0]) => habits.add(input),

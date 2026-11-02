@@ -24,7 +24,17 @@ function llmReturning(payload: unknown, options: { throws?: boolean } = {}): Llm
 }
 
 function makeRuntime(llm: LlmService) {
-  return createRuntime({ llm, defaults: { provider: 'deepseek-account', model: 'deepseek-flash' } })
+  const runtime = createRuntime({ llm, defaults: { provider: 'deepseek-account', model: 'deepseek-flash' } })
+  // 这些用例测的是日程/完成/习惯，首次自我介绍会抢在前面，默认关掉
+  runtime.updateConfig({ onboarding: { welcome: false } })
+  return runtime
+}
+
+/** 需要测首次介绍的用例用这个 */
+function makeRuntimeWithWelcome(llm: LlmService) {
+  const runtime = createRuntime({ llm, defaults: { provider: 'deepseek-account', model: 'deepseek-flash' } })
+  runtime.updateConfig({ onboarding: { welcome: true } })
+  return runtime
 }
 
 beforeEach(() => {
@@ -378,5 +388,55 @@ test('一次性的安排不会被当成习惯', async () => {
   const runtime = makeRuntime(llm)
   assert.equal(await runtime.quickReply('明天下午三点去医院', runtime.getConfig()), null)
   assert.equal(runtime.habits().length, 0)
+  runtime.dispose()
+})
+
+test('首次对话：先自我介绍并问三件事，第二次不再重复', async () => {
+  let calls = 0
+  const llm: LlmService = {
+    stream() {
+      calls++
+      return (async function* () {
+        yield { type: 'text-delta', index: 0, text: '我是秘书鱼，先问你三件事：怎么称呼你？几点睡？想让我记什么？' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+    listProviders() {
+      return [{ id: 'deepseek-account', name: 'DeepSeek Account' }]
+    },
+  }
+  const runtime = makeRuntimeWithWelcome(llm)
+  // 关掉习惯识别，否则第二条消息会多一次意图判断，干扰“不该再调模型”的断言
+  runtime.updateConfig({ habits: { learnFromChat: false } })
+
+  const first = await runtime.quickReply('你好', runtime.getConfig())
+  assert.match(first!, /秘书鱼|三件事/)
+  assert.equal(runtime.onboarding().sent, true)
+
+  const before = calls
+  const second = await runtime.quickReply('你好', runtime.getConfig())
+  assert.equal(second, null, '第二次不再自我介绍')
+  assert.equal(calls, before)
+  runtime.dispose()
+})
+
+test('重置首次介绍后，会再发一次', async () => {
+  const llm: LlmService = {
+    stream() {
+      return (async function* () {
+        yield { type: 'text-delta', index: 0, text: '又见面了，再问一次。' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+    listProviders() {
+      return [{ id: 'deepseek-account', name: 'DeepSeek Account' }]
+    },
+  }
+  const runtime = makeRuntimeWithWelcome(llm)
+  await runtime.quickReply('你好', runtime.getConfig())
+  runtime.resetOnboarding()
+
+  const again = await runtime.quickReply('咦', runtime.getConfig())
+  assert.match(again!, /又见面了/)
   runtime.dispose()
 })

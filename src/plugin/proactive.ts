@@ -2,7 +2,14 @@ import type { AppConfig } from './config.ts'
 import { buildSystemPrompt, stripMarkdown } from './persona.ts'
 import type { LlmService, Route } from './reply.ts'
 
-export type ProactiveKind = 'morning' | 'evening' | 'homework-start' | 'homework-nudge' | 'habit' | 'habit-after'
+export type ProactiveKind =
+  | 'morning'
+  | 'evening'
+  | 'homework-start'
+  | 'homework-nudge'
+  | 'habit'
+  | 'habit-after'
+  | 'welcome'
 
 export interface ProactiveContext {
   kind: ProactiveKind
@@ -41,6 +48,13 @@ const KIND_RULES: Record<ProactiveKind, string> = {
     '用一句自然的问句提起它，比如“你是不是 5 点准备去滑冰了”，不要用命令句。',
     '可以带一句关心或提醒（注意安全、记得带东西），但不要编造细节。',
     '不要在句子里堆信息，两三句就够。',
+  ].join('\n'),
+  welcome: [
+    '这是你们第一次说话。先做一个简短的自我介绍：你是谁、能帮他做什么。',
+    '能做的事只提这几样，各一句：记得住他说过的事、能记日程和提醒、会学他的作息、会在他做事前找他。',
+    '最后问三个问题：怎么称呼他、平时几点睡几点起、最近想让你帮着记什么。',
+    '不要列功能清单式的广告，像新同事第一次打招呼那样自然。',
+    '不要一次说太多，控制在 150 字以内。',
   ].join('\n'),
   'habit-after': [
     '他按习惯要做的事，时间差不多过去了。',
