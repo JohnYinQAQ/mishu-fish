@@ -750,3 +750,29 @@ test('模型判断“还在做”时不会结束会话', async () => {
   assert.ok(runtime.homeworkState(), '会话应该还在')
   runtime.dispose()
 })
+
+test('“我先不复习了，我休息十分钟” → 暂停 10 分钟，不结束会话', async () => {
+  const llm: LlmService = {
+    stream() {
+      return (async function* () {
+        yield { type: 'text-delta', index: 0, text: '好，休息十分钟。' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+    listProviders() {
+      return [{ id: 'deepseek-account', name: 'DeepSeek Account' }]
+    },
+  }
+  const runtime = makeRuntime(llm)
+  await runtime.quickReply('我现在开始写作业', runtime.getConfig())
+  await runtime.quickReply('40 分钟', runtime.getConfig())
+  assert.ok(runtime.homeworkState())
+
+  await runtime.quickReply('我先不复习了，我休息十分钟', runtime.getConfig())
+  const state = runtime.homeworkState()
+  assert.ok(state, '会话不应该结束')
+  assert.ok(state!.pausedUntil, '应该有暂停时间')
+  const minutesLeft = (state!.pausedUntil! - Date.now()) / 60000
+  assert.ok(minutesLeft > 9 && minutesLeft <= 10, `应该剩约 10 分钟，实际 ${minutesLeft}`)
+  runtime.dispose()
+})

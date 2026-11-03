@@ -952,6 +952,23 @@ export function createRuntime(options) {
     }
     /** 作业催促：只要有进行中的会话，就按估时间隔催；不再依赖配置的时段 */
     /** “每十分钟”“每隔 20 分钟”这类要求；支持阿拉伯数字和常用中文数字 */
+    /** “休息十分钟”“歇一会儿”里的分钟数 */
+    function parsePauseMinutes(text) {
+        const cn = { 一: 1, 两: 2, 二: 2, 三: 3, 五: 5, 十: 10, 十五: 15, 二十: 20, 三十: 30 };
+        const match = /([0-9]+|[一二两三四五六七八九十]+)\s*分钟/.exec(text);
+        if (match) {
+            const value = /^\d+$/.test(match[1]) ? Number(match[1]) : cn[match[1]];
+            if (value)
+                return Math.min(60, Math.max(1, value));
+        }
+        if (/半(?:个)?小时/.test(text))
+            return 30;
+        if (/一(?:个)?小时/.test(text))
+            return 60;
+        if (/(一会|一会儿|休息一下|歇一下)/.test(text))
+            return 10;
+        return null;
+    }
     function parseIntervalMinutes(text) {
         const cn = {
             五: 5, 十: 10, 十五: 15, 二十: 20, 二十五: 25, 三十: 30, 四十: 40, 四十五: 45, 六十: 60,
@@ -976,6 +993,13 @@ export function createRuntime(options) {
             return;
         if (!homeworkSession || homeworkSession.estimateMin === null)
             return;
+        if (homeworkSession.pausedUntil) {
+            if (Date.now() < homeworkSession.pausedUntil)
+                return;
+            // 休息结束，重新开始计间隔
+            homeworkSession.pausedUntil = undefined;
+            homeworkSession.lastNudgeAt = Date.now();
+        }
         const maxNudges = homeworkSession.maxNudges ?? 3;
         if (homeworkSession.count >= maxNudges)
             return;
@@ -1071,6 +1095,14 @@ export function createRuntime(options) {
             if (/(不写|不做了|算了|今天不写|不想写)/.test(trimmed)) {
                 homeworkSession = null;
                 return say(cfg, '他今天不想写，答应不再催。', ['状态：今天不写作业'], '行，那今天不催了。', rid);
+            }
+            // “我先不复习了，休息十分钟” → 暂停提醒，休息完继续
+            if (/(休息|歇一会|歇一下|暂停|先不(?:复习|写|做|学|看)了)/.test(trimmed)) {
+                const minutes = parsePauseMinutes(trimmed) ?? 10;
+                homeworkSession.pausedUntil = Date.now() + minutes * 60_000;
+                homeworkSession.lastNudgeAt = Date.now();
+                pushLog({ at: Date.now(), dir: 'sys', rid, text: `暂停提醒 ${minutes} 分钟` });
+                return say(cfg, '他要休息一会儿，答应他，并说明休息结束后会继续陪他。', [`休息：${minutes} 分钟`, '之后再继续'], `好，休息 ${minutes} 分钟，到点我再喊你。`, rid);
             }
             // “再给我十分钟” → 从现在重新计时，并多给一次机会
             const extend = /(?:再给|再等|延长|宽限|给我)\s*([0-9]+|[一二三四五六七八九十]+)\s*分钟/.exec(trimmed);
