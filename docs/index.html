@@ -51,6 +51,8 @@
   }
   .btn:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(15, 47, 87, .08); }
   .btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+  .mini { margin-top: 16px; font-size: 13px; color: #b6bbc2; text-decoration: none; }
+  .mini:hover { color: var(--muted); }
   .scroll-hint {
     position: absolute; bottom: 32px; left: 50%; transform: translateX(-50%);
     color: #c2c7ce; font-size: 13px; letter-spacing: 1px;
@@ -97,9 +99,10 @@
     <h1>秘书鱼</h1>
     <p class="sub">你微信中的私人秘书——会记事、会催你、会在该说话的时候先开口。</p>
     <div class="cta">
-      <a class="btn primary" data-repo="releases" href="#">下载最新版</a>
+      <a class="btn primary" data-repo="archive" href="#">下载最新版</a>
       <a class="btn" data-repo="source" href="#">查看源码</a>
     </div>
+    <a class="mini" data-repo="releases" href="#">历史版本（Releases）</a>
   </div>
   <div class="scroll-hint">向下滚动 ↓</div>
 </div>
@@ -172,8 +175,15 @@
     var owner = isPages ? host.split(".")[0] : "YOUR_NAME";
     var repo = isPages && parts.length ? parts[0] : "mishu-fish";
     var base = "https://github.com/" + owner + "/" + repo;
+    var targets = {
+      source: base,
+      releases: base + "/releases/latest",
+      // 未正式发版前，下载直接给仓库最新代码包：push 完就是最新的
+      archive: base + "/archive/refs/heads/main.zip",
+    };
     document.querySelectorAll("[data-repo]").forEach(function (el) {
-      el.setAttribute("href", el.getAttribute("data-repo") === "releases" ? base + "/releases/latest" : base);
+      var href = targets[el.getAttribute("data-repo")];
+      if (href) el.setAttribute("href", href);
     });
   })();
 </script>
