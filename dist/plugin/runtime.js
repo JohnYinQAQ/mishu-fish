@@ -1014,7 +1014,12 @@ export function createRuntime(options) {
                 ...(interval ? { intervalMinutes: interval, maxNudges: interval <= 15 ? 6 : 3 } : {}),
             };
             rhythm.recordHomeworkStart(Date.now());
-            pushLog({ at: Date.now(), dir: 'sys', rid, text: '开始写作业（记录下来，待问预计时长）' });
+            pushLog({
+                at: Date.now(),
+                dir: 'sys',
+                rid,
+                text: `开始写作业（提醒间隔 ${homeworkSession?.intervalMinutes ?? '默认'} 分钟，最多 ${homeworkSession?.maxNudges ?? 3} 次）`,
+            });
             return composeProactive('homework-start', {}, '那你打算多久写完？给我个大概时间，我按这个节奏来问。');
         }
         // 写作业流程：结束/放弃/估时，都在这条通道里处理
@@ -1035,7 +1040,11 @@ export function createRuntime(options) {
                 if (minutes !== null) {
                     homeworkSession.estimateMin = minutes;
                     homeworkSession.lastNudgeAt = Date.now();
-                    return say(cfg, '确认收到预计时长，告诉他你会按这个时间再来问。', [`预计时长：${minutes} 分钟`], `好，${minutes} 分钟后我再来问一次。`, rid);
+                    return say(cfg, '确认收到预计时长，并说清楚你会多久问一次、问几次。', [
+                        `预计时长：${minutes} 分钟`,
+                        `提醒间隔：每 ${homeworkSession?.intervalMinutes ?? (minutes <= 60 ? 15 : 30)} 分钟一次`,
+                        `最多提醒：${homeworkSession?.maxNudges ?? 3} 次`,
+                    ], `好，${minutes} 分钟后我再来问一次。`, rid);
                 }
             }
         }
