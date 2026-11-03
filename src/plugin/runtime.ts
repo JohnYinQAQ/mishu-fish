@@ -12,7 +12,7 @@ import type { MemoryStore } from './memory.ts'
 import type { ChatMessage } from './persona.ts'
 import { buildEscalationPrompt } from './persona.ts'
 import { completionCandidates, detectCompletion, detectQuery, formatAdded, formatList, inferDueFromText, isQuestion, itemsInRange, looksLikeItHasTime, matchTrigger, rangeLabel } from './schedule-intent.ts'
-import { classifyCompletion, detectActivity, detectMessageIntent, parseScheduleText } from './schedule-parse.ts'
+import { classifyCompletion, classifyHomeworkState, detectActivity, detectMessageIntent, parseScheduleText } from './schedule-parse.ts'
 import { clockMinutes, dayKey, greetingsDue } from './reminder.ts'
 import { canGreet, createRhythmStore, describeProfile, profileForDay } from './rhythm.ts'
 import { DEFAULT_LEAD_MINUTES, createHabitStore, discoverHabits, habitsDue, ruleText } from './habits.ts'
@@ -1123,6 +1123,35 @@ export function createRuntime(options: {
       const trimmed = text.trim()
       const stillWorking = /(没写完|还没|还差|差点|没做完|没弄完)/.test(trimmed)
       const DONE = /(写完|做完|搞定|弄完|完成|交了|收尾|结束)/
+
+      let verdict: { state: string; minutes?: number } | null = null
+      const clearEnough = stillWorking || DONE.test(trimmed) || /(不写|不做了|算了|今天不写|不想写)/.test(trimmed) || /(?:再给|再等|延长|宽限|给我)\s*([0-9]+|[一二三四五六七八九十]+)\s*分钟/.test(trimmed)
+      // 还没问到时长时，这条消息多半就是时长本身，先别让模型判完成
+      if (!clearEnough && homeworkSession.estimateMin !== null) {
+        try {
+          verdict = await classifyHomeworkState(options.llm, bestRoute(), trimmed)
+        } catch (err) {
+          pushLog({ at: Date.now(), dir: 'sys', level: 'warn', rid, text: `作业状态判断失败：${(err as Error)?.message ?? err}` })
+        }
+      }
+
+      if (verdict?.state === 'done') {
+        homeworkSession = null
+        rhythm.recordHomeworkEnd(Date.now())
+        pushLog({ at: Date.now(), dir: 'sys', rid, text: '写作业结束（模型判断）' })
+        return say(cfg, '他写完了作业，收个尾，别继续催。', ['状态：作业已完成'], '好，那今天就到这儿。', rid)
+      }
+      if (verdict?.state === 'abandon') {
+        homeworkSession = null
+        return say(cfg, '他今天不想写，答应不再催。', ['状态：今天不写作业'], '行，那今天不催了。', rid)
+      }
+      if (verdict?.state === 'extend') {
+        const minutes = verdict.minutes ?? 10
+        homeworkSession.lastNudgeAt = Date.now()
+        homeworkSession.maxNudges = (homeworkSession.maxNudges ?? 3) + 1
+        pushLog({ at: Date.now(), dir: 'sys', rid, text: `延长 ${minutes} 分钟（模型判断）` })
+        return say(cfg, '他要再要一点时间，答应他，说明到点会再问一次。', [`延长：${minutes} 分钟`], `好，再给你 ${minutes} 分钟，到点我再问一次。`, rid)
+      }
 
       if (!stillWorking && DONE.test(trimmed)) {
         homeworkSession = null

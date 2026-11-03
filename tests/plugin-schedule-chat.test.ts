@@ -699,3 +699,54 @@ test('“再给我十分钟” 会顺延并多给一次', async () => {
   assert.equal(runtime.homeworkState()?.maxNudges, before + 1)
   runtime.dispose()
 })
+
+test('规则判不出来时，由模型判断“都弄好啦”= 完成', async () => {
+  const llm: LlmService = {
+    stream(options: Record<string, unknown>) {
+      const system = String(options.system ?? '')
+      const payload = system.includes('他正在写作业或复习')
+        ? { state: 'done' }
+        : { title: 'x', due: null }
+      return (async function* () {
+        yield { type: 'text-delta', index: 0, text: JSON.stringify(payload) }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+    listProviders() {
+      return [{ id: 'deepseek-account', name: 'DeepSeek Account' }]
+    },
+  }
+  const runtime = makeRuntime(llm)
+  await runtime.quickReply('我现在开始写作业', runtime.getConfig())
+  await runtime.quickReply('一个小时', runtime.getConfig())
+  assert.ok(runtime.homeworkState())
+
+  await runtime.quickReply('都弄好啦', runtime.getConfig())
+  assert.equal(runtime.homeworkState(), null, '模型判定完成后应结束会话')
+  runtime.dispose()
+})
+
+test('模型判断“还在做”时不会结束会话', async () => {
+  const llm: LlmService = {
+    stream(options: Record<string, unknown>) {
+      const system = String(options.system ?? '')
+      const payload = system.includes('他正在写作业或复习')
+        ? { state: 'working' }
+        : { title: 'x', due: null }
+      return (async function* () {
+        yield { type: 'text-delta', index: 0, text: JSON.stringify(payload) }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+    listProviders() {
+      return [{ id: 'deepseek-account', name: 'DeepSeek Account' }]
+    },
+  }
+  const runtime = makeRuntime(llm)
+  await runtime.quickReply('我现在开始写作业', runtime.getConfig())
+  await runtime.quickReply('半个小时', runtime.getConfig())
+
+  await runtime.quickReply('快好了', runtime.getConfig())
+  assert.ok(runtime.homeworkState(), '会话应该还在')
+  runtime.dispose()
+})

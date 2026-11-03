@@ -415,3 +415,50 @@ export async function detectActivity(
   const raw = await callModel(llm, route, system, text)
   return parseActivityMention(raw)
 }
+
+export type HomeworkState = 'done' | 'working' | 'extend' | 'abandon' | 'other'
+
+export interface HomeworkVerdict {
+  state: HomeworkState
+  /** extend 时要求延长的分钟数 */
+  minutes?: number
+}
+
+const HOMEWORK_STATES = new Set<HomeworkState>(['done', 'working', 'extend', 'abandon', 'other'])
+
+export function parseHomeworkVerdict(raw: string): HomeworkVerdict {
+  const cleaned = raw.replace(/^\s*```(?:json)?/i, '').replace(/```\s*$/i, '').trim()
+  try {
+    const value = JSON.parse(cleaned) as Record<string, unknown>
+    const state = String(value.state ?? '') as HomeworkState
+    if (!HOMEWORK_STATES.has(state)) return { state: 'other' }
+    const minutes = Number(value.minutes)
+    return Number.isFinite(minutes) && minutes > 0 ? { state, minutes: Math.min(120, Math.round(minutes)) } : { state }
+  } catch {
+    return { state: 'other' }
+  }
+}
+
+/**
+ * 他正在写作业/复习时，判断这句话是什么意思。
+ * 规则匹配不出来的说法（“都弄好啦”“我搞定了喵”）交给它。
+ */
+export async function classifyHomeworkState(
+  llm: LlmService,
+  route: Route,
+  text: string,
+): Promise<HomeworkVerdict> {
+  const system = [
+    '他正在写作业或复习，你判断这句话在说什么。只输出 JSON，不要解释：',
+    '{"state":"done"} 做完了（写完、搞定、交了、弄好了，含省略说法）',
+    '{"state":"working"} 还在做（还差一点、快好了、别催）',
+    '{"state":"extend","minutes":10} 要求延长多少分钟',
+    '{"state":"abandon"} 今天不做了（算了、不写了、明天再说）',
+    '{"state":"other"} 和作业无关（闲聊、问问题、说别的事）',
+    '',
+    '注意：「还没写完」「还差一点」是 working，不是 done。',
+  ].join('\n')
+
+  const raw = await callModel(llm, route, system, text)
+  return parseHomeworkVerdict(raw)
+}
