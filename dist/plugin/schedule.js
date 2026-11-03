@@ -147,6 +147,7 @@ export function createScheduleStore(baseDir) {
                 due: patch.due === undefined ? current.due : normalizeDue(patch.due),
                 status: patch.status ?? current.status,
                 repeat: patch.repeat === undefined ? current.repeat : normalizeRepeat(patch.repeat) ?? undefined,
+                lastReminded: patch.lastReminded === undefined ? current.lastReminded : patch.lastReminded,
             };
             items[index] = next;
             write(items);

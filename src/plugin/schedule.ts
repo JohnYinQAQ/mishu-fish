@@ -46,6 +46,8 @@ export interface SchedulePatch {
   due?: string | null
   status?: ScheduleStatus
   repeat?: RepeatRule | null
+  /** 最近一次到点提醒的日期，避免同一天重复提醒 */
+  lastReminded?: string
 }
 
 export interface ScheduleStore {
@@ -200,6 +202,7 @@ export function createScheduleStore(baseDir?: string): ScheduleStore {
         due: patch.due === undefined ? current.due : normalizeDue(patch.due),
         status: patch.status ?? current.status,
         repeat: patch.repeat === undefined ? current.repeat : normalizeRepeat(patch.repeat) ?? undefined,
+        lastReminded: patch.lastReminded === undefined ? current.lastReminded : patch.lastReminded,
       }
       items[index] = next
       write(items)
