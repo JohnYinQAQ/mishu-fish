@@ -79,6 +79,8 @@ export function createRuntime(options: {
     count: number
     intervalMinutes?: number
     maxNudges?: number
+    /** 他说“到 3 点开始”，到这个时刻再问时长 */
+    startAt?: number
     /** 他说要休息，暂停到这个时刻之前不催 */
     pausedUntil?: number
   } | null =
@@ -795,6 +797,7 @@ export function createRuntime(options: {
       void greetingTick()
       void habitTick()
       void weeklyTick()
+      scheduleDueTick()
       homeworkNudgeTick()
     }
     scheduleTimer = setInterval(tick, 60_000)
@@ -1052,6 +1055,28 @@ export function createRuntime(options: {
     return null
   }
 
+  /** “3 点”“三点”“15:00” → 今晚之前最近的这个时刻 */
+  function parseClockMention(text: string, now: Date = new Date()): Date | null {
+    const cn: Record<string, number> = {
+      一: 1, 两: 2, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10, 十一: 11, 十二: 12,
+    }
+    const match = /([0-9]{1,2}|[一二两三四五六七八九十]{1,3})\s*(?:点|:|：)/.exec(text)
+    if (!match) return null
+    const raw = match[1]
+    const hour = /^\d+$/.test(raw) ? Number(raw) : cn[raw]
+    if (!Number.isFinite(hour) || hour > 23) return null
+
+    const later = /(下午|晚上|傍晚|夜里)/.test(text)
+    const base = new Date(now)
+    const candidates = [hour, hour + 12].filter((value) => value <= 23)
+    const resolved = later && hour < 12 ? hour + 12 : candidates.find((value) => value > base.getHours()) ?? hour
+
+    const target = new Date(now)
+    target.setHours(resolved, 0, 0, 0)
+    if (target.getTime() <= now.getTime()) target.setDate(target.getDate() + 1)
+    return target
+  }
+
   function parseIntervalMinutes(text: string): number | null {
     const cn: Record<string, number> = {
       五: 5, 十: 10, 十五: 15, 二十: 20, 二十五: 25, 三十: 30, 四十: 40, 四十五: 45, 六十: 60,
@@ -1070,9 +1095,40 @@ export function createRuntime(options: {
     return Math.min(60, Math.max(5, value))
   }
 
+  /** 到点提醒：今天有截止时间的日程，到点前后一分钟内发一次 */
+  function scheduleDueTick(): void {
+    if (!config.schedule.enabled) return
+    const now = Date.now()
+    const today = dayKey(new Date())
+
+    for (const item of schedule.list()) {
+      if (item.status !== 'pending' || item.repeat || !item.due) continue
+      if (item.lastReminded === today) continue
+      const due = Date.parse(item.due)
+      if (Number.isNaN(due)) continue
+      // 只在到点前后 60 秒内触发，错过的（比如电脑关机）不补
+      if (Math.abs(now - due) > 60_000) continue
+
+      schedule.update(item.id, { lastReminded: today })
+      void composeProactive(
+        'habit',
+        { extra: `到点提醒：${item.title}\n时间：${new Date(due).toLocaleString('zh-CN')}` },
+        `${config.persona.callUser}，${item.title}的时间到了。`,
+      ).then((text) => sendToOwner(text))
+      pushLog({ at: Date.now(), dir: 'sys', text: `到点提醒：${item.title}` })
+    }
+  }
+
   function homeworkNudgeTick(): void {
     if (!config.rhythm.enabled) return
     if (!homeworkSession || homeworkSession.estimateMin === null) return
+
+    if (homeworkSession.startAt && Date.now() >= homeworkSession.startAt) {
+      homeworkSession.startAt = undefined
+      homeworkSession.lastNudgeAt = Date.now()
+      void composeProactive('homework-start', {}, '到点了，打算多久写完？').then((text) => sendToOwner(text))
+      return
+    }
 
     if (homeworkSession.pausedUntil) {
       if (Date.now() < homeworkSession.pausedUntil) return
@@ -1219,6 +1275,20 @@ export function createRuntime(options: {
         )
       }
       if (homeworkSession.estimateMin === null) {
+        const startAt = parseClockMention(trimmed)
+        if (startAt) {
+          homeworkSession.startAt = startAt.getTime()
+          homeworkSession.lastNudgeAt = Date.now()
+          pushLog({ at: Date.now(), dir: 'sys', rid, text: `约定开始时间：${startAt.toLocaleString('zh-CN')}` })
+          return say(
+            cfg,
+            '他和你说好几点开始，确认这个时间，并说清到点会先问时长再提醒。',
+            [`开始时间：${startAt.toLocaleString('zh-CN')}`],
+            `好，${startAt.getHours()} 点开始，到点我先问你要写多久。`,
+            rid,
+          )
+        }
+
         const minutes = parseDurationMinutes(trimmed)
         if (minutes !== null) {
           homeworkSession.estimateMin = minutes

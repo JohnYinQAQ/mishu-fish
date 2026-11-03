@@ -7,6 +7,21 @@ export const MIN_SAMPLES_FOR_GREETING = 5;
 /** 周末天数天然只有工作日的一半，门槛放低 */
 export const MIN_SAMPLES_FOR_GREETING_WEEKEND = 3;
 const WINDOW_DAYS = 14;
+/** 凌晨 4 点前算前一天：熬夜聊到 1 点，不该把那天记成“1 点起床” */
+const DAY_CUTOFF_HOUR = 4;
+function logicalDate(date) {
+    if (date.getHours() < DAY_CUTOFF_HOUR) {
+        const prev = new Date(date);
+        prev.setDate(prev.getDate() - 1);
+        return prev;
+    }
+    return date;
+}
+/** 一天内的分钟数；跨零点的时间往后接（00:30 → 1470），方便排序和取中位数 */
+function minutesOf(date) {
+    const minutes = date.getHours() * 60 + date.getMinutes();
+    return date.getHours() < DAY_CUTOFF_HOUR ? minutes + 1440 : minutes;
+}
 function dateKey(date) {
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
@@ -149,8 +164,8 @@ export function createRhythmStore(baseDir) {
         file,
         record(at) {
             const date = new Date(at);
-            const key = dateKey(date);
-            const minutes = date.getHours() * 60 + date.getMinutes();
+            const key = dateKey(logicalDate(date));
+            const minutes = minutesOf(date);
             const hour = String(date.getHours());
             const days = read();
             const existing = days.find((day) => day.date === key);
@@ -167,9 +182,9 @@ export function createRhythmStore(baseDir) {
         days: () => read(),
         recordHomeworkStart(at) {
             const date = new Date(at);
-            const minutes = date.getHours() * 60 + date.getMinutes();
+            const minutes = minutesOf(date);
             const days = read();
-            const key = dateKey(date);
+            const key = dateKey(logicalDate(date));
             const existing = days.find((day) => day.date === key);
             if (existing) {
                 existing.homework = [...(existing.homework ?? []), { start: minutes }];
@@ -200,8 +215,8 @@ export function createRhythmStore(baseDir) {
         },
         recordSleep(at) {
             const date = new Date(at);
-            const key = dateKey(date);
-            const minutes = date.getHours() * 60 + date.getMinutes();
+            const key = dateKey(logicalDate(date));
+            const minutes = minutesOf(date);
             const days = read();
             const existing = days.find((day) => day.date === key);
             if (existing) {
