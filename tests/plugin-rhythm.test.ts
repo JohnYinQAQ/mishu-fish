@@ -222,3 +222,19 @@ test('同一天内结束的作业仍能学出时段', () => {
   assert.equal(hw!.start, 20 * 60)
   assert.equal(hw!.end, 22 * 60)
 })
+
+test('凌晨消息算前一天：不会把 00:30 当成“起床”', () => {
+  const store = createRhythmStore()
+  const base = new Date(2026, 10, 2, 15, 0) // 11-02 15:00
+  store.record(base.getTime())
+
+  // 次日 00:30 发消息，应该归到 11-02
+  const afterMidnight = new Date(2026, 10, 3, 0, 30)
+  store.record(afterMidnight.getTime())
+
+  const days = store.days()
+  assert.equal(days.length, 1, '应该只有一条日期记录')
+  assert.equal(days[0].date, '2026-11-02')
+  assert.equal(days[0].first, 15 * 60, '起床时间仍是 15:00')
+  assert.equal(days[0].last, 24 * 60 + 30, '最后一条接在 24 点之后')
+})
