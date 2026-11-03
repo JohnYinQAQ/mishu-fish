@@ -556,3 +556,24 @@ test('模型回复失败时回落到固定文案', async () => {
   assert.match(reply!, /记下了/)
   runtime.dispose()
 })
+
+test('“每十分钟提醒我” → 按 10 分钟催，最多 6 次', async () => {
+  const llm: LlmService = {
+    stream() {
+      return (async function* () {
+        yield { type: 'text-delta', index: 0, text: '好，每十分钟问你一次。' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+    listProviders() {
+      return [{ id: 'deepseek-account', name: 'DeepSeek Account' }]
+    },
+  }
+  const runtime = makeRuntime(llm)
+
+  const reply = await runtime.quickReply('我现在开始写作业，每十分钟提醒我一下', runtime.getConfig())
+  assert.match(reply!, /十分钟|10/)
+  assert.equal(runtime.homeworkState()?.intervalMinutes, 10)
+  assert.equal(runtime.homeworkState()?.maxNudges, 6)
+  runtime.dispose()
+})

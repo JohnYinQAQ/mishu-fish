@@ -72,7 +72,14 @@ export function createRuntime(options: {
   const habits = createHabitStore()
   const activities = createActivityStore()
   /** 写作业流程：先问用多久，再按估计间隔催，最多三次 */
-  let homeworkSession: { startedAt: number; estimateMin: number | null; lastNudgeAt: number; count: number } | null =
+  let homeworkSession: {
+    startedAt: number
+    estimateMin: number | null
+    lastNudgeAt: number
+    count: number
+    intervalMinutes?: number
+    maxNudges?: number
+  } | null =
     null
   /** 最近一次问“这条过期的还要不要”的对象 */
   let lastOverdueAsk: { id: string; title: string; at: number } | null = null
@@ -1028,13 +1035,31 @@ export function createRuntime(options: {
   }
 
   /** 作业催促：只要有进行中的会话，就按估时间隔催；不再依赖配置的时段 */
+  /** “每十分钟”“每隔 20 分钟”这类要求；支持阿拉伯数字和常用中文数字 */
+  function parseIntervalMinutes(text: string): number | null {
+    const cn: Record<string, number> = {
+      五: 5, 十: 10, 十五: 15, 二十: 20, 二十五: 25, 三十: 30, 四十: 40, 四十五: 45, 六十: 60,
+    }
+    const match = /每(?:隔)?\s*([0-9]+|[一二三四五六七八九十]+)\s*分钟/.exec(text)
+    if (!match) {
+      if (/每半(?:个)?小时/.test(text)) return 30
+      if (/每(?:个)?小时/.test(text)) return 60
+      return null
+    }
+    const raw = match[1]
+    const value = /^\d+$/.test(raw) ? Number(raw) : cn[raw]
+    if (!value) return null
+    return Math.min(60, Math.max(5, value))
+  }
+
   function homeworkNudgeTick(): void {
     if (!config.rhythm.enabled) return
     if (!homeworkSession || homeworkSession.estimateMin === null) return
-    if (homeworkSession.count >= 3) return
+    const maxNudges = homeworkSession.maxNudges ?? 3
+    if (homeworkSession.count >= maxNudges) return
 
-    // 短任务催得勤一点，长任务最多半小时一次
-    const interval = homeworkSession.estimateMin <= 60 ? 15 : 30
+    // 他说了“每 N 分钟”就按他说的；没说就短任务 15、长任务 30
+    const interval = homeworkSession.intervalMinutes ?? (homeworkSession.estimateMin <= 60 ? 15 : 30)
     if (Date.now() - homeworkSession.lastNudgeAt < interval * 60_000) return
 
     homeworkSession.count += 1
@@ -1066,7 +1091,14 @@ export function createRuntime(options: {
     // 聊天里说“我要开始写作业了”：立刻进入流程，并记下开始时间
     const wantsHomework = /(开始写作业|开始做作业|要写作业|准备写作业|写作业了|做作业了|写作业去)/.test(text)
     if (cfg.rhythm.enabled && wantsHomework && !homeworkSession) {
-      homeworkSession = { startedAt: Date.now(), estimateMin: null, lastNudgeAt: Date.now(), count: 0 }
+      const interval = parseIntervalMinutes(text)
+      homeworkSession = {
+        startedAt: Date.now(),
+        estimateMin: null,
+        lastNudgeAt: Date.now(),
+        count: 0,
+        ...(interval ? { intervalMinutes: interval, maxNudges: interval <= 15 ? 6 : 3 } : {}),
+      }
       rhythm.recordHomeworkStart(Date.now())
       pushLog({ at: Date.now(), dir: 'sys', rid, text: '开始写作业（记录下来，待问预计时长）' })
       return composeProactive('homework-start', {}, '那你打算多久写完？给我个大概时间，我按这个节奏来问。')
@@ -1577,6 +1609,7 @@ export function createRuntime(options: {
     },
 
     quickReply,
+    homeworkState: () => homeworkSession,
     runGreeting: (kind: 'morning' | 'evening') => sendGreeting(kind),
     runDigestNow,
     digestState: () => ({ running: digestRunning, pending: Boolean(readPendingReport()) }),
