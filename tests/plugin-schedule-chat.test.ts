@@ -577,3 +577,59 @@ test('“每十分钟提醒我” → 按 10 分钟催，最多 6 次', async ()
   assert.equal(runtime.homeworkState()?.maxNudges, 6)
   runtime.dispose()
 })
+
+test('“现在复习明天的数学考试” → 进入专注模式并问时长', async () => {
+  const llm: LlmService = {
+    stream() {
+      return (async function* () {
+        yield { type: 'text-delta', index: 0, text: '好，那这次打算复习多久？' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+    listProviders() {
+      return [{ id: 'deepseek-account', name: 'DeepSeek Account' }]
+    },
+  }
+  const runtime = makeRuntime(llm)
+
+  const reply = await runtime.quickReply('ok，现在复习明天的数学考试', runtime.getConfig())
+  assert.ok(runtime.homeworkState(), '应该进入专注会话')
+  assert.match(reply ?? '', /多久|分钟/)
+  runtime.dispose()
+})
+
+test('“20 分钟后提醒我” → 间隔 20 分钟', async () => {
+  const llm: LlmService = {
+    stream() {
+      return (async function* () {
+        yield { type: 'text-delta', index: 0, text: '好。' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+    listProviders() {
+      return [{ id: 'deepseek-account', name: 'DeepSeek Account' }]
+    },
+  }
+  const runtime = makeRuntime(llm)
+  await runtime.quickReply('现在开始写作业，20 分钟后提醒我一下', runtime.getConfig())
+  assert.equal(runtime.homeworkState()?.intervalMinutes, 20)
+  runtime.dispose()
+})
+
+test('“我复习完了” 不会开启新的专注会话', async () => {
+  const llm: LlmService = {
+    stream() {
+      return (async function* () {
+        yield { type: 'text-delta', index: 0, text: '好。' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+    listProviders() {
+      return [{ id: 'deepseek-account', name: 'DeepSeek Account' }]
+    },
+  }
+  const runtime = makeRuntime(llm)
+  await runtime.quickReply('我复习完了', runtime.getConfig())
+  assert.equal(runtime.homeworkState(), null)
+  runtime.dispose()
+})

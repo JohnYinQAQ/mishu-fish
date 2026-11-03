@@ -1040,7 +1040,9 @@ export function createRuntime(options: {
     const cn: Record<string, number> = {
       五: 5, 十: 10, 十五: 15, 二十: 20, 二十五: 25, 三十: 30, 四十: 40, 四十五: 45, 六十: 60,
     }
-    const match = /每(?:隔)?\s*([0-9]+|[一二三四五六七八九十]+)\s*分钟/.exec(text)
+    const match =
+      /每(?:隔)?\s*([0-9]+|[一二三四五六七八九十]+)\s*分钟/.exec(text) ??
+      /([0-9]+|[一二三四五六七八九十]+)\s*分钟(?:后|之后)\s*(?:提醒|叫我|提醒我)/.exec(text)
     if (!match) {
       if (/每半(?:个)?小时/.test(text)) return 30
       if (/每(?:个)?小时/.test(text)) return 60
@@ -1089,7 +1091,14 @@ export function createRuntime(options: {
     }
 
     // 聊天里说“我要开始写作业了”：立刻进入流程，并记下开始时间
-    const wantsHomework = /(开始写作业|开始做作业|要写作业|准备写作业|写作业了|做作业了|写作业去)/.test(text)
+    // 明确开始 + 学习类动词也算；“我复习完了”这种不算
+    const STUDY = /(写作业|做作业|复习|学习|刷题|做题|看书|背书|背单词|写论文|写报告|写代码)/
+    const START_CUE = /(现在|开始|这就|马上|我准备)/
+    const finishedCue = /(完了|结束了|做完了|写完了)/
+    const wantsHomework =
+      !finishedCue.test(text) &&
+      (/(开始写作业|开始做作业|要写作业|准备写作业|写作业了|做作业了|写作业去)/.test(text) ||
+        (START_CUE.test(text) && STUDY.test(text)))
     if (cfg.rhythm.enabled && wantsHomework && !homeworkSession) {
       const interval = parseIntervalMinutes(text)
       homeworkSession = {
