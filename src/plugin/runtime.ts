@@ -1121,7 +1121,10 @@ export function createRuntime(options: {
     // 写作业流程：结束/放弃/估时，都在这条通道里处理
     if (cfg.rhythm.enabled && homeworkSession) {
       const trimmed = text.trim()
-      if (/(写完了|做完了|交了|搞定了|弄完了)/.test(trimmed)) {
+      const stillWorking = /(没写完|还没|还差|差点|没做完|没弄完)/.test(trimmed)
+      const DONE = /(写完|做完|搞定|弄完|完成|交了|收尾|结束)/
+
+      if (!stillWorking && DONE.test(trimmed)) {
         homeworkSession = null
         rhythm.recordHomeworkEnd(Date.now())
         pushLog({ at: Date.now(), dir: 'sys', rid, text: '写作业结束（记录用时）' })
@@ -1130,6 +1133,22 @@ export function createRuntime(options: {
       if (/(不写|不做了|算了|今天不写|不想写)/.test(trimmed)) {
         homeworkSession = null
         return say(cfg, '他今天不想写，答应不再催。', ['状态：今天不写作业'], '行，那今天不催了。', rid)
+      }
+
+      // “再给我十分钟” → 从现在重新计时，并多给一次机会
+      const extend = /(?:再给|再等|延长|宽限|给我)\s*([0-9]+|[一二三四五六七八九十]+)\s*分钟/.exec(trimmed)
+      if (extend) {
+        const minutes = parseIntervalMinutes(`每${extend[1]}分钟`) ?? 10
+        homeworkSession.lastNudgeAt = Date.now()
+        homeworkSession.maxNudges = (homeworkSession.maxNudges ?? 3) + 1
+        pushLog({ at: Date.now(), dir: 'sys', rid, text: `延长 ${minutes} 分钟（上限 +1）` })
+        return say(
+          cfg,
+          '他要再要一点时间，答应他，说明到点会再问一次。',
+          [`延长：${minutes} 分钟`],
+          `好，再给你 ${minutes} 分钟，到点我再问一次。`,
+          rid,
+        )
       }
       if (homeworkSession.estimateMin === null) {
         const minutes = parseDurationMinutes(trimmed)

@@ -633,3 +633,69 @@ test('“我复习完了” 不会开启新的专注会话', async () => {
   assert.equal(runtime.homeworkState(), null)
   runtime.dispose()
 })
+
+test('“写完！！！” 能结束专注会话（不需要“了”）', async () => {
+  const llm: LlmService = {
+    stream() {
+      return (async function* () {
+        yield { type: 'text-delta', index: 0, text: '写完啦，真棒。' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+    listProviders() {
+      return [{ id: 'deepseek-account', name: 'DeepSeek Account' }]
+    },
+  }
+  const runtime = makeRuntime(llm)
+  await runtime.quickReply('我现在开始写作业', runtime.getConfig())
+  await runtime.quickReply('一个小时', runtime.getConfig())
+  assert.ok(runtime.homeworkState())
+
+  const reply = await runtime.quickReply('写完！！！', runtime.getConfig())
+  assert.match(reply!, /到这儿|真棒|写完/)
+  assert.equal(runtime.homeworkState(), null, '会话应该被清掉')
+  runtime.dispose()
+})
+
+test('“还没写完” 不会误判成完成', async () => {
+  const llm: LlmService = {
+    stream() {
+      return (async function* () {
+        yield { type: 'text-delta', index: 0, text: '好，继续。' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+    listProviders() {
+      return [{ id: 'deepseek-account', name: 'DeepSeek Account' }]
+    },
+  }
+  const runtime = makeRuntime(llm)
+  await runtime.quickReply('我现在开始写作业', runtime.getConfig())
+  await runtime.quickReply('一个小时', runtime.getConfig())
+
+  await runtime.quickReply('还没写完', runtime.getConfig())
+  assert.ok(runtime.homeworkState(), '会话应该还在')
+  runtime.dispose()
+})
+
+test('“再给我十分钟” 会顺延并多给一次', async () => {
+  const llm: LlmService = {
+    stream() {
+      return (async function* () {
+        yield { type: 'text-delta', index: 0, text: '好，再给你十分钟。' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+    listProviders() {
+      return [{ id: 'deepseek-account', name: 'DeepSeek Account' }]
+    },
+  }
+  const runtime = makeRuntime(llm)
+  await runtime.quickReply('我现在开始写作业', runtime.getConfig())
+  await runtime.quickReply('半个小时', runtime.getConfig())
+  const before = runtime.homeworkState()?.maxNudges ?? 3
+
+  await runtime.quickReply('再给我十分钟吧', runtime.getConfig())
+  assert.equal(runtime.homeworkState()?.maxNudges, before + 1)
+  runtime.dispose()
+})
