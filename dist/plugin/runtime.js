@@ -1067,6 +1067,16 @@ export function createRuntime(options) {
      * 顺序：新增 → 查询 → 完成。都不命中返回 null，走正常聊天。
      */
     async function quickReply(text, cfg, rid = '-') {
+        // 习惯提醒触发了，但他今天不打算去 → 别再追问
+        if (/(今天不|不去了|不打了|取消|改天|算了)/.test(text)) {
+            const today = dayKey(new Date());
+            const hit = habits.list().find((habit) => habit.lastSentOn === today && habit.lastAfterAskOn !== today);
+            if (hit) {
+                habits.markAfterAsk(hit.id, today);
+                pushLog({ at: Date.now(), dir: 'sys', rid, text: `今天跳过：${hit.label}` });
+                return say(cfg, '他今天不打算去了，答应他，别再提这件事。', [`今天不去：${hit.label}`], `好，${hit.label}今天先算了，我不再提。`, rid);
+            }
+        }
         // 第一次说话：先打招呼介绍自己，这段话是固定的，不走模型
         if (cfg.onboarding.welcome && !welcomeSent()) {
             markWelcomeSent();

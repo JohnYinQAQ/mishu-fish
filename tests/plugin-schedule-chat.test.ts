@@ -776,3 +776,33 @@ test('“我先不复习了，我休息十分钟” → 暂停 10 分钟，不�
   assert.ok(minutesLeft > 9 && minutesLeft <= 10, `应该剩约 10 分钟，实际 ${minutesLeft}`)
   runtime.dispose()
 })
+
+test('习惯提醒后说“今天不去了” → 不再追问', async () => {
+  const llm: LlmService = {
+    stream() {
+      return (async function* () {
+        yield { type: 'text-delta', index: 0, text: '好，那今天先算了。' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+    listProviders() {
+      return [{ id: 'deepseek-account', name: 'DeepSeek Account' }]
+    },
+  }
+  const runtime = makeRuntime(llm)
+  const habit = runtime.addHabit({
+    label: '打游戏',
+    category: '其他',
+    rule: { kind: 'weekly', time: '15:00', weekday: 3 },
+    status: 'active',
+    afterAsk: true,
+  })
+  // 模拟今天已经提醒过
+  runtime.updateHabit(habit.id, { lastSentOn: new Date().toISOString().slice(0, 10) })
+
+  const reply = await runtime.quickReply('今天不去了', runtime.getConfig())
+  assert.match(reply!, /算了|不再提/)
+  const after = runtime.habits().find((entry) => entry.id === habit.id)
+  assert.ok(after?.lastAfterAskOn, '应该标记为今天已追问，避免再问')
+  runtime.dispose()
+})
