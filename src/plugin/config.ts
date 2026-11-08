@@ -68,6 +68,8 @@ export interface MemoryConfig {
   /** 命中触发词时检索相关原文（现在就在用） */
   recallEnabled: boolean
   recallMaxLines: number
+  /** 原话检索往回翻多少天（1–90） */
+  recallDays: number
   triggerWords: string[]
   /** 事实卡字符上限 */
   factsLimit: number
@@ -205,6 +207,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     retrieveSummaries: false,
     recallEnabled: true,
     recallMaxLines: 6,
+    recallDays: 30,
     triggerWords: ['上次', '前几天', '之前', '那个事', '还记得', '记得我', '我说过'],
     factsLimit: 400,
     summaryTime: '05:00',
@@ -363,6 +366,7 @@ export function normalizeConfig(raw: unknown): AppConfig {
       retrieveSummaries: bool(memory.retrieveSummaries, DEFAULT_CONFIG.memory.retrieveSummaries),
       recallEnabled: bool(memory.recallEnabled, DEFAULT_CONFIG.memory.recallEnabled),
       recallMaxLines: int(memory.recallMaxLines, 2, 20, DEFAULT_CONFIG.memory.recallMaxLines),
+      recallDays: int(memory.recallDays, 1, 90, DEFAULT_CONFIG.memory.recallDays),
       triggerWords: Array.isArray(memory.triggerWords)
         ? memory.triggerWords
             .filter((word): word is string => typeof word === 'string')

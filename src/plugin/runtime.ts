@@ -325,7 +325,7 @@ export function createRuntime(options: {
       if (mem.recallEnabled && mem.triggerWords.some((word) => word && userText.includes(word))) {
         const inWindow = new Set(entries.map((entry) => entry.at))
         const matches = memory
-          .search(userText, { days: 7, limit: mem.recallMaxLines, scope: 'chat' })
+          .search(userText, { days: mem.recallDays ?? 30, limit: mem.recallMaxLines, scope: 'chat' })
           .filter((match) => !inWindow.has(match.at))
         recall = matches
           .map((match) => {

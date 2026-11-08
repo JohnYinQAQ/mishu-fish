@@ -116,3 +116,10 @@ test('buildSystemPrompt：带上当前本地时间，避免模型把晚上当成
 
   assert.match(buildSystemPrompt(config, '', undefined, morning), /07:30/)
 })
+
+test('normalizeConfig: 原话检索范围默认 30 天，可改并夹紧', () => {
+  assert.equal(normalizeConfig({}).memory.recallDays, 30)
+  assert.equal(normalizeConfig({ memory: { recallDays: 14 } }).memory.recallDays, 14)
+  assert.equal(normalizeConfig({ memory: { recallDays: 0 } }).memory.recallDays, 1)
+  assert.equal(normalizeConfig({ memory: { recallDays: 999 } }).memory.recallDays, 90)
+})
