@@ -18,7 +18,7 @@ import { canGreet, createRhythmStore, describeProfile, profileForDay } from './r
 import { DEFAULT_LEAD_MINUTES, createHabitStore, discoverHabits, habitsDue, ruleText } from './habits.ts'
 import { createActivityStore, describeActivity, toHabitInput } from './activities.ts'
 import type { Habit } from './habits.ts'
-import { composeReply, generateProactive } from './proactive.ts'
+import { composeReply, generateProactive, looksLikeData } from './proactive.ts'
 import type { ProactiveContext, ProactiveKind } from './proactive.ts'
 import { doneToday, repeatText } from './schedule.ts'
 import { itemLines } from './format.ts'
@@ -587,6 +587,11 @@ export function createRuntime(options: {
 
   /** 系统通知兜底：按平台选实现，失败不影响主流程 */
   function notifyDesktop(text: string): void {
+    // 保险：结构化数据绝不进通知
+    if (looksLikeData(text)) {
+      pushLog({ at: Date.now(), dir: 'sys', level: 'warn', text: '通知内容像结构化数据，已丢弃' })
+      return
+    }
     const body = text.slice(0, 200)
     try {
       if (process.platform === 'darwin') {

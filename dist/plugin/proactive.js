@@ -71,6 +71,18 @@ export function buildProactiveMessages(config, facts, context, now = new Date())
     return { system, user: lines.join('\n\n') || '（没有特别的事项）' };
 }
 const PROACTIVE_TIMEOUT_MS = 30_000;
+/**
+ * 模型偶尔会把结构化数据当成回复吐出来（{"title":…}）。
+ * 这种绝不能发出去，也不能进系统通知。
+ */
+export function looksLikeData(text) {
+    const trimmed = text.trim();
+    if (/^[\[{]/.test(trimmed))
+        return true;
+    if (/"(title|due|schedule|state|activity|habit|repeat|summary|facts)"\s*:/.test(trimmed))
+        return true;
+    return false;
+}
 /** 生成一条主动消息；失败返回 null，调用方负责回落到模板 */
 export async function generateProactive(llm, route, config, facts, context) {
     const attempt = async (system, user) => {
@@ -100,7 +112,9 @@ export async function generateProactive(llm, route, config, facts, context) {
         }
         if (failure)
             throw new Error(failure);
-        return stripMarkdown(text).trim();
+        const clean = stripMarkdown(text).trim();
+        // 结构化输出当空处理：走重试，重试还不行就交给调用方兜底
+        return looksLikeData(clean) ? '' : clean;
     };
     const { system, user } = buildProactiveMessages(config, facts, context, new Date());
     const first = await attempt(system, user);
@@ -158,5 +172,7 @@ export async function composeReply(llm, route, config, facts, spec, now = new Da
     const clean = stripMarkdown(text).trim();
     if (!clean)
         throw new Error('模型返回空');
+    if (looksLikeData(clean))
+        throw new Error('模型返回了结构化数据，不是一句话');
     return clean.slice(0, 600);
 }

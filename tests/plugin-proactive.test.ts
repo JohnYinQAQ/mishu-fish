@@ -66,3 +66,30 @@ test('generateProactive：模型失败会抛出，调用方兜底', async () => 
     /MISSING_CREDENTIAL/,
   )
 })
+
+test('looksLikeData：结构化输出会被识别', async () => {
+  const { looksLikeData } = await import('../src/plugin/proactive.ts')
+  assert.equal(looksLikeData('{"title":"去图书馆","due":null}'), true)
+  assert.equal(looksLikeData('[1,2,3]'), true)
+  assert.equal(looksLikeData('好的，我记下了 {"due":null} 喵'), true)
+  assert.equal(looksLikeData('主人，是不是快到三点啦？'), false)
+  assert.equal(looksLikeData('今天有两件事：· 交报告'), false)
+})
+
+test('composeReply：模型返回 JSON 时抛错，让调用方回落', async () => {
+  const { composeReply } = await import('../src/plugin/proactive.ts')
+  const config = normalizeConfig({})
+  const llm = llmReturning('{"title":"去图书馆","due":null}')
+  await assert.rejects(
+    composeReply(llm, defaults, config, '', { instruction: '说一句', data: [], fallback: '兜底' }),
+    /结构化数据/,
+  )
+})
+
+test('generateProactive：模型返回 JSON 时返回 null', async () => {
+  const { generateProactive } = await import('../src/plugin/proactive.ts')
+  const config = normalizeConfig({})
+  const llm = llmReturning('{"title":"去图书馆","due":null}')
+  const text = await generateProactive(llm, defaults, config, '', { kind: 'morning' })
+  assert.equal(text, null)
+})

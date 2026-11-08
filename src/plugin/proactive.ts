@@ -104,6 +104,17 @@ export function buildProactiveMessages(
 
 const PROACTIVE_TIMEOUT_MS = 30_000
 
+/**
+ * 模型偶尔会把结构化数据当成回复吐出来（{"title":…}）。
+ * 这种绝不能发出去，也不能进系统通知。
+ */
+export function looksLikeData(text: string): boolean {
+  const trimmed = text.trim()
+  if (/^[\[{]/.test(trimmed)) return true
+  if (/"(title|due|schedule|state|activity|habit|repeat|summary|facts)"\s*:/.test(trimmed)) return true
+  return false
+}
+
 /** 生成一条主动消息；失败返回 null，调用方负责回落到模板 */
 export async function generateProactive(
   llm: LlmService,
@@ -137,7 +148,9 @@ export async function generateProactive(
       if (value.type === 'text-delta' && typeof value.text === 'string') text += value.text
     }
     if (failure) throw new Error(failure)
-    return stripMarkdown(text).trim()
+    const clean = stripMarkdown(text).trim()
+    // 结构化输出当空处理：走重试，重试还不行就交给调用方兜底
+    return looksLikeData(clean) ? '' : clean
   }
 
   const { system, user } = buildProactiveMessages(config, facts, context, new Date())
@@ -212,5 +225,6 @@ export async function composeReply(
   if (failure) throw new Error(failure)
   const clean = stripMarkdown(text).trim()
   if (!clean) throw new Error('模型返回空')
+  if (looksLikeData(clean)) throw new Error('模型返回了结构化数据，不是一句话')
   return clean.slice(0, 600)
 }
