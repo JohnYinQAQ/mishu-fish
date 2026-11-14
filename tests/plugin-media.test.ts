@@ -59,3 +59,27 @@ test('saveMedia：写进 media/YYYY-MM 并返回路径', () => {
   assert.match(file, /media\/2026-11\//)
   assert.equal(fs.readFileSync(file, 'utf8'), 'abc')
 })
+
+test('downloadImage：从 URL 拉密文、解密、落盘', async () => {
+  const { downloadImage } = await import('../src/plugin/media.ts')
+  const png = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    Buffer.from('fake png body'.repeat(8), 'utf8'),
+  ])
+  const cipher = encrypt(png, KEY)
+  const dataUrl = `data:application/octet-stream;base64,${cipher.toString('base64')}`
+
+  const result = await downloadImage(dataUrl, KEY.toString('hex'))
+  assert.equal(result.mediaType, 'image/png')
+  assert.ok(fs.existsSync(result.file))
+  assert.deepEqual(fs.readFileSync(result.file), png)
+})
+
+test('downloadImage：密钥不对时报错，不会写出坏文件', async () => {
+  const { downloadImage } = await import('../src/plugin/media.ts')
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  const cipher = encrypt(png, KEY)
+  const dataUrl = `data:application/octet-stream;base64,${cipher.toString('base64')}`
+
+  await assert.rejects(downloadImage(dataUrl, crypto.randomBytes(16).toString('hex')), /解密|图片/)
+})

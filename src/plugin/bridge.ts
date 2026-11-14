@@ -40,6 +40,8 @@ export interface BridgeDeps {
   quickReply?: (text: string, config: AppConfig, rid: string) => Promise<string | null>
   /** 每条入站消息都会调一次（作息采样用） */
   onInbound?: (text: string, rid: string) => void
+  /** 收到图片/文件时调用；返回要回给他的话，null 表示回兜底话术 */
+  onMedia?: (msg: unknown, rid: string) => Promise<string | null>
   log: (entry: LogEntry) => void
   onStatus: (patch: Partial<BridgeStatus>) => void
   /** 测试注入点 */
@@ -166,6 +168,18 @@ export function createBridge(deps: BridgeDeps): Bridge {
     if (quick !== null) {
       reply = quick
     } else if (!text) {
+      let handled: string | null = null
+      if (deps.onMedia) {
+        try {
+          handled = await deps.onMedia(msg, rid)
+        } catch (err) {
+          deps.log({ at: Date.now(), dir: 'sys', level: 'warn', rid, text: `媒体处理失败：${String((err as Error)?.message ?? err)}` })
+        }
+      }
+
+      if (handled) {
+        reply = handled
+      } else {
       // 暂时还看不了图片/文件：把完整结构写到文件里，方便做媒体下载
       const dumped = dumpInbound(deps, msg, rid)
       deps.log({
@@ -176,6 +190,7 @@ export function createBridge(deps: BridgeDeps): Bridge {
         text: `收到非文本消息：${describeNonText(msg)}${dumped ? `｜完整结构已写到 ${dumped}` : ''}`,
       })
       reply = '我暂时只能看文字，图片和文件还接不了。'
+      }
     } else {
       try {
         await api.sendTyping(deps.creds, userId, contextToken, true)

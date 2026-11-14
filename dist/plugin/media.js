@@ -76,3 +76,21 @@ export function dumpInbound(_deps, msg, rid) {
         return null;
     }
 }
+/** 从 full_url 拉密文，按 aeskey 解密，嗅探类型后落盘 */
+export async function downloadImage(fullUrl, aesKeyHex, options = {}) {
+    const key = decodeAesKey(aesKeyHex);
+    if (!key)
+        throw new Error('aeskey 解析失败');
+    const response = await fetch(fullUrl, { signal: options.signal });
+    if (!response.ok)
+        throw new Error(`下载失败 HTTP ${response.status}`);
+    const cipher = Buffer.from(await response.arrayBuffer());
+    if (cipher.length === 0)
+        throw new Error('下载到空内容');
+    const plain = decryptEcb(cipher, key);
+    const kind = sniffImageType(plain);
+    if (!kind)
+        throw new Error('解密后不是图片');
+    const file = saveMedia(plain, kind.ext, options.at);
+    return { file, mediaType: kind.mediaType, bytes: plain.length };
+}

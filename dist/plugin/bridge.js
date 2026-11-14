@@ -99,16 +99,30 @@ export function createBridge(deps) {
             reply = quick;
         }
         else if (!text) {
-            // 暂时还看不了图片/文件：把完整结构写到文件里，方便做媒体下载
-            const dumped = dumpInbound(deps, msg, rid);
-            deps.log({
-                at: Date.now(),
-                dir: 'sys',
-                level: 'warn',
-                rid,
-                text: `收到非文本消息：${describeNonText(msg)}${dumped ? `｜完整结构已写到 ${dumped}` : ''}`,
-            });
-            reply = '我暂时只能看文字，图片和文件还接不了。';
+            let handled = null;
+            if (deps.onMedia) {
+                try {
+                    handled = await deps.onMedia(msg, rid);
+                }
+                catch (err) {
+                    deps.log({ at: Date.now(), dir: 'sys', level: 'warn', rid, text: `媒体处理失败：${String(err?.message ?? err)}` });
+                }
+            }
+            if (handled) {
+                reply = handled;
+            }
+            else {
+                // 暂时还看不了图片/文件：把完整结构写到文件里，方便做媒体下载
+                const dumped = dumpInbound(deps, msg, rid);
+                deps.log({
+                    at: Date.now(),
+                    dir: 'sys',
+                    level: 'warn',
+                    rid,
+                    text: `收到非文本消息：${describeNonText(msg)}${dumped ? `｜完整结构已写到 ${dumped}` : ''}`,
+                });
+                reply = '我暂时只能看文字，图片和文件还接不了。';
+            }
         }
         else {
             try {

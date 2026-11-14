@@ -22,6 +22,7 @@ import { composeReply, generateProactive, looksLikeData } from './proactive.ts'
 import type { ProactiveContext, ProactiveKind } from './proactive.ts'
 import { doneToday, repeatText } from './schedule.ts'
 import { itemLines } from './format.ts'
+import { downloadImage } from './media.ts'
 import type { LlmService, Route } from './reply.ts'
 import { execFile } from 'node:child_process'
 import fs from 'node:fs'
@@ -886,6 +887,40 @@ export function createRuntime(options: {
     }
   }
 
+  /**
+   * 收到图片：下载 → 解密 → 存盘 → 交给后台 agent 看。
+   * agent 不可用时如实告诉他图已经存下来了。
+   */
+  async function handleMedia(msg: unknown, rid: string): Promise<string | null> {
+    const items = (msg as { item_list?: Array<Record<string, unknown>> })?.item_list ?? []
+    const image = items.find((item) => item.image_item)?.['image_item'] as
+      | { aeskey?: string; media?: { full_url?: string } }
+      | undefined
+    if (!image?.media?.full_url || !image.aeskey) return null
+
+    let saved
+    try {
+      saved = await downloadImage(image.media.full_url, image.aeskey)
+      pushLog({ at: Date.now(), dir: 'sys', rid, text: `收到图片：${saved.file}（${saved.mediaType}，${Math.round(saved.bytes / 1024)}KB）` })
+    } catch (err) {
+      pushLog({ at: Date.now(), dir: 'sys', level: 'warn', rid, text: `图片下载/解密失败：${(err as Error)?.message ?? err}` })
+      return '这张图我收不到，能再发一次吗？'
+    }
+
+    if (!config.escalation.enabled || !options.escalate) {
+      return `图我收到了，先存着（${saved.file}）。我现在还看不懂图里的内容，等这功能做好再帮你看。`
+    }
+
+    try {
+      const outcome = await options.escalate(`看一下这张图片，用两三句话说说里面是什么：${saved.file}`, config)
+      if (outcome.ok && outcome.text.trim()) return outcome.text
+      return `图我收到了（${saved.file}），但这次没能看清，能再说说你想问什么吗？`
+    } catch (err) {
+      pushLog({ at: Date.now(), dir: 'sys', level: 'warn', rid, text: `看图失败：${(err as Error)?.message ?? err}` })
+      return `图我收下了（${saved.file}），但看图的服务没起来，等下再试？`
+    }
+  }
+
   async function composeProactive(kind: ProactiveKind, context: Omit<ProactiveContext, 'kind' | 'previous'>, fallback: string): Promise<string> {
     const facts =
       config.memory.enabled && config.memory.injectFacts ? memory.facts().slice(0, config.memory.factsLimit) : ''
@@ -1646,6 +1681,7 @@ export function createRuntime(options: {
       },
       generate,
       quickReply,
+      onMedia: handleMedia,
       escalate: options.escalate
         ? async (task, cfg, rid = '-') => {
             const recent = cfg.memory.enabled && cfg.escalation.carryMemory
