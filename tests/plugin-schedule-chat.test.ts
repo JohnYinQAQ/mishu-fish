@@ -797,8 +797,10 @@ test('习惯提醒后说“今天不去了” → 不再追问', async () => {
     status: 'active',
     afterAsk: true,
   })
-  // 模拟今天已经提醒过
-  runtime.updateHabit(habit.id, { lastSentOn: new Date().toISOString().slice(0, 10) })
+  // 模拟今天已经提醒过（用本地日期，和运行时一致）
+  const now = new Date()
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  runtime.updateHabit(habit.id, { lastSentOn: today })
 
   const reply = await runtime.quickReply('今天不去了', runtime.getConfig())
   assert.match(reply!, /算了|不再提/)
