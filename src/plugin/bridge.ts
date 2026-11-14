@@ -1,6 +1,7 @@
 import { getUpdates, sendText, sendTyping } from '../ilink/bot.ts'
 import { ILinkError, isSessionExpired, isTimeout, sleep } from '../ilink/http.ts'
 import { describeNonText, isFromUser, isGroupMessage, messageKey, textOf } from '../text.ts'
+import { dumpInbound } from './media.ts'
 import { loadState, rememberMessage, saveState } from '../store.ts'
 import type { State } from '../store.ts'
 import type { Credentials, WeixinMessage } from '../ilink/types.ts'
@@ -165,14 +166,14 @@ export function createBridge(deps: BridgeDeps): Bridge {
     if (quick !== null) {
       reply = quick
     } else if (!text) {
-      // 暂时还看不了图片/文件：先把收到的结构记下来，方便做媒体下载
-      const shape = JSON.stringify(msg.item_list ?? []).slice(0, 800)
+      // 暂时还看不了图片/文件：把完整结构写到文件里，方便做媒体下载
+      const dumped = dumpInbound(deps, msg, rid)
       deps.log({
         at: Date.now(),
         dir: 'sys',
         level: 'warn',
         rid,
-        text: `收到非文本消息：${describeNonText(msg)} | 结构 ${shape}`,
+        text: `收到非文本消息：${describeNonText(msg)}${dumped ? `｜完整结构已写到 ${dumped}` : ''}`,
       })
       reply = '我暂时只能看文字，图片和文件还接不了。'
     } else {

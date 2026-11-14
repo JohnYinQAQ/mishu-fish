@@ -1,6 +1,7 @@
 import { getUpdates, sendText, sendTyping } from "../ilink/bot.js";
 import { ILinkError, isSessionExpired, isTimeout, sleep } from "../ilink/http.js";
 import { describeNonText, isFromUser, isGroupMessage, messageKey, textOf } from "../text.js";
+import { dumpInbound } from "./media.js";
 import { loadState, rememberMessage, saveState } from "../store.js";
 import { inQuietHours } from "./persona.js";
 /** 24 小时会话窗口：iLink 回复必须带最近一条入站消息的 context_token */
@@ -98,14 +99,14 @@ export function createBridge(deps) {
             reply = quick;
         }
         else if (!text) {
-            // 暂时还看不了图片/文件：先把收到的结构记下来，方便做媒体下载
-            const shape = JSON.stringify(msg.item_list ?? []).slice(0, 800);
+            // 暂时还看不了图片/文件：把完整结构写到文件里，方便做媒体下载
+            const dumped = dumpInbound(deps, msg, rid);
             deps.log({
                 at: Date.now(),
                 dir: 'sys',
                 level: 'warn',
                 rid,
-                text: `收到非文本消息：${describeNonText(msg)} | 结构 ${shape}`,
+                text: `收到非文本消息：${describeNonText(msg)}${dumped ? `｜完整结构已写到 ${dumped}` : ''}`,
             });
             reply = '我暂时只能看文字，图片和文件还接不了。';
         }

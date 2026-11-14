@@ -60,3 +60,19 @@ export function saveMedia(bytes, ext, at = new Date()) {
     fs.writeFileSync(file, bytes, { mode: 0o600 });
     return file;
 }
+/**
+ * 把一条入站消息的完整结构写到磁盘，用于摸清媒体字段。
+ * 只在还看不懂的非文本消息上调用，平时不产生文件。
+ */
+export function dumpInbound(_deps, msg, rid) {
+    try {
+        const dir = path.join(homeDir(), 'media', 'debug');
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+        const file = path.join(dir, `${rid}-${Date.now()}.json`);
+        fs.writeFileSync(file, JSON.stringify(msg, null, 2), { mode: 0o600 });
+        return file;
+    }
+    catch {
+        return null;
+    }
+}
