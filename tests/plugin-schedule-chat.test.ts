@@ -808,3 +808,50 @@ test('习惯提醒后说“今天不去了” → 不再追问', async () => {
   assert.ok(after?.lastAfterAskOn, '应该标记为今天已追问，避免再问')
   runtime.dispose()
 })
+
+test('图片内容会写进对话记忆，下一句能接上', async () => {
+  const crypto = await import('node:crypto')
+  const key = crypto.randomBytes(16)
+  const png = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    Buffer.from('fake image bytes'.repeat(4), 'utf8'),
+  ])
+  const cipher = crypto.createCipheriv('aes-128-ecb', key, null)
+  const encrypted = Buffer.concat([cipher.update(png), cipher.final()])
+  const fullUrl = `data:application/octet-stream;base64,${encrypted.toString('base64')}`
+
+  const llm: LlmService = {
+    stream() {
+      return (async function* () {
+        yield { type: 'text-delta', index: 0, text: JSON.stringify({ reply: '主人在操场吗喵', topic: '学校', keywords: ['操场'] }) }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+    listProviders() {
+      return [{ id: 'deepseek-account', name: 'DeepSeek Account' }]
+    },
+  }
+  const runtime = createRuntime({
+    llm,
+    defaults: { provider: 'deepseek-account', model: 'deepseek-flash' },
+    escalate: async () => ({ ok: true, text: '一张操场和铁丝网的照片，天色阴沉' }),
+  })
+  runtime.updateConfig({ onboarding: { welcome: false }, reply: { modelReplies: false }, escalation: { enabled: true } })
+
+  const msg = {
+    item_list: [{ type: 2, image_item: { aeskey: key.toString('hex'), media: { full_url: fullUrl } } }],
+  }
+  const reply = await runtime.handleMedia(msg, 'test-rid')
+  assert.match(reply ?? '', /操场/)
+
+  // 记忆里应该留下图片描述和她的回复
+  const day = new Date()
+  const file = `${dir}/memory/${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}.jsonl`
+  const lines = fs.readFileSync(file, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+  assert.ok(
+    lines.some((entry: { text: string }) => entry.text.includes('[图片]') && entry.text.includes('操场')),
+    '图片描述应该写进记忆',
+  )
+  assert.ok(lines.some((entry: { text: string }) => entry.text.includes('操场吗喵')), '她的回复也应该写进记忆')
+  runtime.dispose()
+})

@@ -816,6 +816,19 @@ export function createRuntime(options) {
      * agent 不可用时如实告诉他图已经存下来了。
      */
     async function handleMedia(msg, rid) {
+        // 图片本身没有文字，把描述写进记忆，下一句话才接得上
+        const remember = (role, text) => {
+            try {
+                memory.append({ at: Date.now(), role, text, scope: 'chat' });
+            }
+            catch {
+                /* ignore */
+            }
+        };
+        const finish = (text) => {
+            remember('assistant', text);
+            return text;
+        };
         const items = msg?.item_list ?? [];
         const image = items.find((item) => item.image_item)?.['image_item'];
         if (!image?.media?.full_url || !image.aeskey)
@@ -827,10 +840,11 @@ export function createRuntime(options) {
         }
         catch (err) {
             pushLog({ at: Date.now(), dir: 'sys', level: 'warn', rid, text: `图片下载/解密失败：${err?.message ?? err}` });
-            return '这张图我收不到，能再发一次吗？';
+            return finish('这张图我收不到，能再发一次吗？');
         }
         if (!config.escalation.enabled || !options.escalate) {
-            return `图我收到了，先存着（${saved.file}）。我现在还看不懂图里的内容，等这功能做好再帮你看。`;
+            remember('user', '[图片]（这张图我还没能看清）');
+            return finish(`图我收到了，先存着（${saved.file}）。我现在还看不懂图里的内容，等这功能做好再帮你看。`);
         }
         let description = '';
         try {
@@ -842,9 +856,12 @@ export function createRuntime(options) {
             pushLog({ at: Date.now(), dir: 'sys', level: 'warn', rid, text: `看图失败：${err?.message ?? err}` });
         }
         if (!description) {
-            return `图我收下了（${saved.file}），但这次没能看清，能再说说你想问什么吗？`;
+            remember('user', '[图片]（这张图没能看清）');
+            return finish(`图我收下了（${saved.file}），但这次没能看清，能再说说你想问什么吗？`);
         }
         pushLog({ at: Date.now(), dir: 'sys', rid, text: `图片描述：${description.slice(0, 120)}` });
+        // 关键：把图片内容写进对话记忆，后面他再问「刚才那张图」才接得上
+        remember('user', `[图片] ${description.slice(0, 300)}`);
         // 用她自己的语气回应，而不是把描述原样丢回去
         const facts = config.memory.enabled && config.memory.injectFacts ? memory.facts().slice(0, config.memory.factsLimit) : '';
         const history = memory.recent(Math.min(config.memory.recentCount, 8), { scope: 'chat' }).map((entry) => ({
@@ -881,13 +898,13 @@ export function createRuntime(options) {
                         pushLog({ at: Date.now(), dir: 'sys', rid, text: `写进事实卡：${line}` });
                     }
                 }
-                return composed.reply;
+                return finish(composed.reply);
             }
         }
         catch (err) {
             pushLog({ at: Date.now(), dir: 'sys', level: 'warn', rid, text: `图片回应生成失败：${err?.message ?? err}` });
         }
-        return description;
+        return finish(description);
     }
     async function composeProactive(kind, context, fallback) {
         const facts = config.memory.enabled && config.memory.injectFacts ? memory.facts().slice(0, config.memory.factsLimit) : '';
@@ -1693,6 +1710,7 @@ export function createRuntime(options) {
         },
         quickReply,
         homeworkState: () => homeworkSession,
+        handleMedia,
         runGreeting: (kind) => sendGreeting(kind),
         runDigestNow,
         digestState: () => ({ running: digestRunning, pending: Boolean(readPendingReport()) }),
