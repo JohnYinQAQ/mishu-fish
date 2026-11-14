@@ -98,6 +98,15 @@ export function createBridge(deps) {
             reply = quick;
         }
         else if (!text) {
+            // 暂时还看不了图片/文件：先把收到的结构记下来，方便做媒体下载
+            const shape = JSON.stringify(msg.item_list ?? []).slice(0, 800);
+            deps.log({
+                at: Date.now(),
+                dir: 'sys',
+                level: 'warn',
+                rid,
+                text: `收到非文本消息：${describeNonText(msg)} | 结构 ${shape}`,
+            });
             reply = '我暂时只能看文字，图片和文件还接不了。';
         }
         else {
