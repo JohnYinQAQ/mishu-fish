@@ -893,7 +893,17 @@ export function createRuntime(options: {
    * 收到图片：下载 → 解密 → 存盘 → 交给后台 agent 看。
    * agent 不可用时如实告诉他图已经存下来了。
    */
+  /** 图片处理串行：同一时间只跑一张，避免后台会话被并发挤掉 */
+  let mediaQueue: Promise<unknown> = Promise.resolve()
+
   async function handleMedia(msg: unknown, rid: string): Promise<string | null> {
+    const run = () => handleMediaOnce(msg, rid)
+    const result = mediaQueue.then(run, run)
+    mediaQueue = result.catch(() => undefined)
+    return result
+  }
+
+  async function handleMediaOnce(msg: unknown, rid: string): Promise<string | null> {
     // 图片本身没有文字，把描述写进记忆，下一句话才接得上
     const remember = (role: 'user' | 'assistant', text: string) => {
       try {
