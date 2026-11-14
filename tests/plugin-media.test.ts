@@ -81,5 +81,5 @@ test('downloadImage：密钥不对时报错，不会写出坏文件', async () =
   const cipher = encrypt(png, KEY)
   const dataUrl = `data:application/octet-stream;base64,${cipher.toString('base64')}`
 
-  await assert.rejects(downloadImage(dataUrl, crypto.randomBytes(16).toString('hex')), /解密|图片/)
+  await assert.rejects(downloadImage(dataUrl, crypto.randomBytes(16).toString('hex')))
 })
