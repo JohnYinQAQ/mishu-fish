@@ -16,6 +16,7 @@ import { composeReply, generateProactive, looksLikeData } from "./proactive.js";
 import { doneToday, repeatText } from "./schedule.js";
 import { itemLines } from "./format.js";
 import { downloadImage } from "./media.js";
+import { composeImageReply, createTopicStore, shouldRecordTopic, topicFactLine } from "./image-reply.js";
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -33,6 +34,7 @@ export function createRuntime(options) {
     const rhythm = createRhythmStore();
     const habits = createHabitStore();
     const activities = createActivityStore();
+    const imageTopics = createTopicStore();
     /** 写作业流程：先问用多久，再按估计间隔催，最多三次 */
     let homeworkSession = null;
     /** 最近一次问“这条过期的还要不要”的对象 */
@@ -830,16 +832,47 @@ export function createRuntime(options) {
         if (!config.escalation.enabled || !options.escalate) {
             return `图我收到了，先存着（${saved.file}）。我现在还看不懂图里的内容，等这功能做好再帮你看。`;
         }
+        let description = '';
         try {
-            const outcome = await options.escalate(`看一下这张图片，用两三句话说说里面是什么：${saved.file}`, config);
-            if (outcome.ok && outcome.text.trim())
-                return outcome.text;
-            return `图我收到了（${saved.file}），但这次没能看清，能再说说你想问什么吗？`;
+            const outcome = await options.escalate(`看一下这张图片，用两三句话客观描述里面是什么：${saved.file}`, config);
+            if (outcome.ok)
+                description = outcome.text.trim();
         }
         catch (err) {
             pushLog({ at: Date.now(), dir: 'sys', level: 'warn', rid, text: `看图失败：${err?.message ?? err}` });
-            return `图我收下了（${saved.file}），但看图的服务没起来，等下再试？`;
         }
+        if (!description) {
+            return `图我收下了（${saved.file}），但这次没能看清，能再说说你想问什么吗？`;
+        }
+        pushLog({ at: Date.now(), dir: 'sys', rid, text: `图片描述：${description.slice(0, 120)}` });
+        // 用她自己的语气回应，而不是把描述原样丢回去
+        const facts = config.memory.enabled && config.memory.injectFacts ? memory.facts().slice(0, config.memory.factsLimit) : '';
+        const history = memory.recent(Math.min(config.memory.recentCount, 8), { scope: 'chat' }).map((entry) => ({
+            role: entry.role,
+            text: entry.text,
+        }));
+        try {
+            const composed = await composeImageReply(options.llm, bestRoute(), config, facts, description, history);
+            if (composed) {
+                const record = imageTopics.record(composed.topic);
+                if (record) {
+                    pushLog({ at: Date.now(), dir: 'sys', rid, text: `图片主题：${record.topic}（累计 ${record.count} 次 / ${record.days.length} 天）` });
+                    if (shouldRecordTopic(record)) {
+                        const line = topicFactLine(record.topic);
+                        const current = memory.facts();
+                        if (current && !current.includes(line)) {
+                            memory.writeFacts([current, line].filter(Boolean).join('\n'));
+                            pushLog({ at: Date.now(), dir: 'sys', rid, text: `写进事实卡：${line}` });
+                        }
+                    }
+                }
+                return composed.reply;
+            }
+        }
+        catch (err) {
+            pushLog({ at: Date.now(), dir: 'sys', level: 'warn', rid, text: `图片回应生成失败：${err?.message ?? err}` });
+        }
+        return description;
     }
     async function composeProactive(kind, context, fallback) {
         const facts = config.memory.enabled && config.memory.injectFacts ? memory.facts().slice(0, config.memory.factsLimit) : '';
