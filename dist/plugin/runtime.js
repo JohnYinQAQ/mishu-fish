@@ -852,7 +852,14 @@ export function createRuntime(options) {
             text: entry.text,
         }));
         try {
-            const composed = await composeImageReply(options.llm, bestRoute(), config, facts, description, history);
+            // 把已有的关键词带进去，让模型优先复用，别每次造新词
+            const knownKeywords = imageTopics
+                .list()
+                .filter((entry) => entry.kind === 'keyword')
+                .sort((a, b) => b.count - a.count)
+                .slice(0, 20)
+                .map((entry) => entry.topic);
+            const composed = await composeImageReply(options.llm, bestRoute(), config, facts, description, history, knownKeywords);
             if (composed) {
                 const records = [
                     imageTopics.record(composed.topic, 'category'),

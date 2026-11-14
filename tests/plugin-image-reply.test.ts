@@ -84,3 +84,26 @@ test('shouldRecordTopic：5 次且跨 3 天才写进事实卡', () => {
   assert.equal(topicFactLine('猫', 'keyword'), '- 常发与「猫」有关的图片')
   assert.equal(parseImageReply('{"reply":"喵","topic":"宠物","keywords":["猫","沙发"]}')?.keywords.length, 2)
 })
+
+test('mergeKeyword：近义词并到已有标签', async () => {
+  const { mergeKeyword } = await import('../src/plugin/image-reply.ts')
+  assert.equal(mergeKeyword('海边日落', ['海边日落']), '海边日落')
+  assert.equal(mergeKeyword('落日', ['海边日落']), '海边日落', '包含关系要并')
+  assert.equal(mergeKeyword('海边黄昏', ['海边日落']), '海边日落', '相近也要并')
+  assert.equal(mergeKeyword('熊猫', ['猫']), '熊猫', '短词不能被吞掉')
+  assert.equal(mergeKeyword('图书馆', ['海边日落']), '图书馆', '不同的词要保留')
+})
+
+test('composeImageReply：把已有标签喂给模型，并做本地归一', async () => {
+  const llm = llmReturning('{"reply":"又去海边啦喵","topic":"风景","keywords":["落日"]}')
+  const result = await composeImageReply(
+    llm,
+    { provider: 'p', model: 'm' },
+    normalizeConfig({}),
+    '',
+    '海边日落',
+    [],
+    ['海边日落', '猫'],
+  )
+  assert.deepEqual(result?.keywords, ['海边日落'])
+})

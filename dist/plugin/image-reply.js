@@ -28,7 +28,59 @@ export function parseImageReply(raw) {
  * 收到图片后：用她的人设 + 事实卡回应，同时给这张图归一个类别。
  * 一次调用同时产出「回应」和「主题」，避免为同一张图花两次钱。
  */
-export async function composeImageReply(llm, route, config, facts, description, history = []) {
+/** 字符二元组重合度，用来判断两个关键词是不是同一件事 */
+export function keywordSimilarity(a, b) {
+    const grams = (text) => {
+        const clean = text.replace(/[^\u4e00-\u9fa5a-z0-9]/gi, '').toLowerCase();
+        const out = new Set();
+        for (let index = 0; index < clean.length - 1; index++)
+            out.add(clean.slice(index, index + 2));
+        return out;
+    };
+    const left = grams(a);
+    const right = grams(b);
+    if (left.size === 0 || right.size === 0)
+        return a === b ? 1 : 0;
+    let shared = 0;
+    for (const gram of left)
+        if (right.has(gram))
+            shared += 1;
+    return shared / (left.size + right.size - shared);
+}
+/**
+ * 把新关键词并到已有标签上：完全包含或高度相似就复用旧词，
+ * 避免「海边日落 / 落日 / 黄昏」各记一份、永远攒不够次数。
+ */
+export function mergeKeyword(candidate, existing) {
+    const clean = candidate.trim();
+    if (!clean)
+        return '';
+    for (const known of existing) {
+        if (known === clean)
+            return known;
+        if (clean.includes(known) || known.includes(clean)) {
+            // 包含关系也要够长，避免「猫」把「熊猫」并掉
+            if (Math.min(known.length, clean.length) >= 2)
+                return known;
+        }
+        if (keywordSimilarity(clean, known) >= 0.6)
+            return known;
+        // 「落日」和「海边日落」这种：字面顺序不同，但用字高度重合
+        const chars = (text) => new Set(text.replace(/[^\u4e00-\u9fa5a-z0-9]/gi, '').split(''));
+        const a = chars(clean);
+        const b = chars(known);
+        if (a.size >= 2 && b.size >= 2) {
+            let shared = 0;
+            for (const ch of a)
+                if (b.has(ch))
+                    shared += 1;
+            if (shared / Math.min(a.size, b.size) >= 0.5)
+                return known;
+        }
+    }
+    return clean;
+}
+export async function composeImageReply(llm, route, config, facts, description, history = [], knownKeywords = []) {
     const system = [
         buildSystemPrompt(config, facts),
         '',
@@ -44,6 +96,9 @@ export async function composeImageReply(llm, route, config, facts, description, 
         '另外用你自己的话总结 1–3 个关键词，描述这张图里的具体东西（地点、物品、活动），',
         '每个 2–6 个字，例如：教室、图书馆、海边日落、猫、数学题。',
         '关键词要具体，不要重复 topic。',
+        knownKeywords.length > 0
+            ? `已有的关键词：${knownKeywords.slice(0, 20).join('、')}。如果这张图属于其中某一个，必须原样复用那个词，不要造近义新词。`
+            : '',
         '',
         '只输出 JSON，不要代码块：{"reply":"你要说的话","topic":"类别","keywords":["关键词1","关键词2"]}',
     ].join('\n');
@@ -75,7 +130,11 @@ export async function composeImageReply(llm, route, config, facts, description, 
     }
     if (failure)
         throw new Error(failure);
-    return parseImageReply(text);
+    const parsed = parseImageReply(text);
+    if (!parsed)
+        return null;
+    // 模型没听话时再兜一层：把近义词并到已有标签
+    return { ...parsed, keywords: parsed.keywords.map((word) => mergeKeyword(word, knownKeywords)).filter(Boolean) };
 }
 /** 图片主题计数：同一类图反复出现，说明他生活里常出现这个场景 */
 export function createTopicStore(baseDir) {
