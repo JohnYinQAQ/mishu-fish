@@ -936,16 +936,24 @@ export function createRuntime(options: {
     try {
       const composed = await composeImageReply(options.llm, bestRoute(), config, facts, description, history)
       if (composed) {
-        const record = imageTopics.record(composed.topic)
-        if (record) {
-          pushLog({ at: Date.now(), dir: 'sys', rid, text: `图片主题：${record.topic}（累计 ${record.count} 次 / ${record.days.length} 天）` })
-          if (shouldRecordTopic(record)) {
-            const line = topicFactLine(record.topic)
-            const current = memory.facts()
-            if (current && !current.includes(line)) {
-              memory.writeFacts([current, line].filter(Boolean).join('\n'))
-              pushLog({ at: Date.now(), dir: 'sys', rid, text: `写进事实卡：${line}` })
-            }
+        const records = [
+          imageTopics.record(composed.topic, 'category'),
+          ...composed.keywords.map((keyword) => imageTopics.record(keyword, 'keyword')),
+        ].filter((record): record is NonNullable<typeof record> => Boolean(record))
+
+        for (const record of records) {
+          pushLog({
+            at: Date.now(),
+            dir: 'sys',
+            rid,
+            text: `图片${record.kind === 'category' ? '类别' : '关键词'}：${record.topic}（${record.count} 次 / ${record.days.length} 天）`,
+          })
+          if (!shouldRecordTopic(record)) continue
+          const line = topicFactLine(record.topic, record.kind)
+          const current = memory.facts()
+          if (current && !current.includes(line)) {
+            memory.writeFacts([current, line].filter(Boolean).join('\n'))
+            pushLog({ at: Date.now(), dir: 'sys', rid, text: `写进事实卡：${line}` })
           }
         }
         return composed.reply

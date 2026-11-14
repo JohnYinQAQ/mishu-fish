@@ -7,8 +7,14 @@ import type { LlmService, Route } from './reply.ts'
 
 export interface ImageReply {
   reply: string
+  /** 预设类别，固定枚举里的一个 */
   topic: string
+  /** 模型自由总结的关键词，1–3 个 */
+  keywords: string[]
 }
+
+/** 预设类别：主题统计先落在这个框里，保证能聚合 */
+export const IMAGE_CATEGORIES = ['海边', '学校', '宠物', '食物', '风景', '工作', '动漫', '截图', '其他'] as const
 
 export function parseImageReply(raw: string): ImageReply | null {
   const cleaned = raw.replace(/^\s*```(?:json)?/i, '').replace(/```\s*$/i, '').trim()
@@ -16,8 +22,14 @@ export function parseImageReply(raw: string): ImageReply | null {
     const value = JSON.parse(cleaned) as Record<string, unknown>
     const reply = typeof value.reply === 'string' ? stripMarkdown(value.reply).trim() : ''
     const topic = typeof value.topic === 'string' ? value.topic.trim() : ''
+    const rawKeywords = Array.isArray(value.keywords) ? value.keywords : []
+    const keywords = rawKeywords
+      .filter((word): word is string => typeof word === 'string')
+      .map((word) => word.trim().slice(0, 12))
+      .filter((word) => word.length > 0)
+      .slice(0, 3)
     if (!reply) return null
-    return { reply: reply.slice(0, 500), topic: topic.slice(0, 12) }
+    return { reply: reply.slice(0, 500), topic: topic.slice(0, 12), keywords }
   } catch {
     return null
   }
@@ -43,10 +55,15 @@ export async function composeImageReply(
     '你要像平时聊天那样回应他：可能是分享日常、分享一件要做的事、或单纯给你看个景。',
     '不要复述描述，也不要逐条列举画面里的东西；挑你注意到的、和他有关的点说，1–3 句。',
     '',
-    '同时判断这张图属于哪一类（用来慢慢了解他的生活），例如：海边、学校、宠物、食物、风景、工作、动漫、截图、其他。',
-    'topic 只写一个词，2–6 个字。',
+    '同时判断这张图属于哪一类，只能从下面选一个：',
+    `${IMAGE_CATEGORIES.join('、')}。`,
+    'topic 必须原样返回其中一个。',
     '',
-    '只输出 JSON，不要代码块：{"reply":"你要说的话","topic":"类别"}',
+    '另外用你自己的话总结 1–3 个关键词，描述这张图里的具体东西（地点、物品、活动），',
+    '每个 2–6 个字，例如：教室、图书馆、海边日落、猫、数学题。',
+    '关键词要具体，不要重复 topic。',
+    '',
+    '只输出 JSON，不要代码块：{"reply":"你要说的话","topic":"类别","keywords":["关键词1","关键词2"]}',
   ].join('\n')
 
   const recent = history.slice(-4).map((entry) => `${entry.role === 'user' ? '他' : '你'}：${entry.text}`).join('\n')
@@ -81,6 +98,8 @@ export async function composeImageReply(
 
 export interface TopicRecord {
   topic: string
+  /** category = 预设类别；keyword = 模型自由总结 */
+  kind: 'category' | 'keyword'
   count: number
   days: string[]
   firstSeen: number
@@ -116,17 +135,18 @@ export function createTopicStore(baseDir?: string) {
     file,
     list: () => Object.values(read()),
 
-    record(topic: string, at: number = Date.now()): TopicRecord | null {
+    record(topic: string, kind: 'category' | 'keyword' = 'category', at: number = Date.now()): TopicRecord | null {
       const clean = topic.trim().slice(0, 12)
       if (!clean) return null
       const topics = read()
+      const key = `${kind}:${clean}`
       const date = new Date(at)
       const day = `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`
-      const existing = topics[clean] ?? { topic: clean, count: 0, days: [], firstSeen: at, lastSeen: at }
+      const existing = topics[key] ?? { topic: clean, kind, count: 0, days: [], firstSeen: at, lastSeen: at }
       existing.count += 1
       if (!existing.days.includes(day)) existing.days.push(day)
       existing.lastSeen = at
-      topics[clean] = existing
+      topics[key] = existing
       write(topics)
       return existing
     },
@@ -139,6 +159,6 @@ export function shouldRecordTopic(record: TopicRecord): boolean {
 }
 
 /** 给事实卡准备的那一行 */
-export function topicFactLine(topic: string): string {
-  return `- 常发${topic}相关的图片`
+export function topicFactLine(topic: string, kind: 'category' | 'keyword' = 'category'): string {
+  return kind === 'keyword' ? `- 常发与「${topic}」有关的图片` : `- 常发${topic}相关的图片`
 }

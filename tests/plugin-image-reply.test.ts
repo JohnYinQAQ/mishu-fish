@@ -42,6 +42,7 @@ function llmReturning(text: string): LlmService {
 test('parseImageReply：解析回应和主题', () => {
   const parsed = parseImageReply('{"reply":"主人在海边吗喵，风大不大？","topic":"海边"}')
   assert.equal(parsed?.topic, '海边')
+  assert.deepEqual(parsed?.keywords, [])
   assert.match(parsed!.reply, /海边/)
 
   assert.equal(parseImageReply('不是 JSON'), null, '解析失败返回 null')
@@ -64,9 +65,9 @@ test('composeImageReply：一次调用同时拿到回应和主题', async () => 
 
 test('createTopicStore：同一主题跨天累计', () => {
   const store = createTopicStore()
-  store.record('海边', new Date(2026, 10, 1, 10).getTime())
-  store.record('海边', new Date(2026, 10, 2, 11).getTime())
-  store.record('海边', new Date(2026, 10, 2, 12).getTime())
+  store.record('海边', 'category', new Date(2026, 10, 1, 10).getTime())
+  store.record('海边', 'category', new Date(2026, 10, 2, 11).getTime())
+  store.record('海边', 'category', new Date(2026, 10, 2, 12).getTime())
 
   const [record] = store.list()
   assert.equal(record.topic, '海边')
@@ -75,9 +76,11 @@ test('createTopicStore：同一主题跨天累计', () => {
 })
 
 test('shouldRecordTopic：5 次且跨 3 天才写进事实卡', () => {
-  const base = { topic: '海边', firstSeen: 0, lastSeen: 0 }
+  const base = { topic: '海边', kind: 'category' as const, firstSeen: 0, lastSeen: 0 }
   assert.equal(shouldRecordTopic({ ...base, count: 5, days: ['1', '2'] }), false)
   assert.equal(shouldRecordTopic({ ...base, count: 5, days: ['1', '2', '3'] }), true)
   assert.equal(shouldRecordTopic({ ...base, count: 4, days: ['1', '2', '3'] }), false)
   assert.equal(topicFactLine('海边'), '- 常发海边相关的图片')
+  assert.equal(topicFactLine('猫', 'keyword'), '- 常发与「猫」有关的图片')
+  assert.equal(parseImageReply('{"reply":"喵","topic":"宠物","keywords":["猫","沙发"]}')?.keywords.length, 2)
 })
